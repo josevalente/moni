@@ -39,19 +39,44 @@ export function toast(msg, { label, onAction, ms = 4000 } = {}) {
 }
 
 // ---- Modales ---------------------------------------------------------------
-export function modal(title, body, { actions, wide, onClose } = {}) {
+// dismissable: tocar fuera (o Escape) cierra. Los formularios lo desactivan para no perder lo escrito
+// (en iPhone es común tocar fuera para bajar el teclado).
+let openModals = 0;
+let modalSeq = 0;
+export function modal(title, body, { actions, wide, onClose, dismissable = true } = {}) {
   const back = h('div', { class: 'backdrop' });
-  const close = () => { back.remove(); document.body.classList.remove('noscroll'); onClose && onClose(); };
-  const sheet = h('div', { class: 'sheet' + (wide ? ' wide' : ''), role: 'dialog', 'aria-modal': 'true' },
+  const prevFocus = document.activeElement;
+  const titleId = 'modal-title-' + (++modalSeq);
+  const vv = window.visualViewport;
+  // con el teclado abierto iOS no achica la pantalla: se ajusta al área visible para que el pie
+  // (Guardar) quede sobre el teclado
+  const fit = () => { if (vv) { back.style.height = vv.height + 'px'; back.style.top = vv.offsetTop + 'px'; } };
+  let closed = false;
+  const onKey = (e) => { if (e.key === 'Escape' && dismissable && [...document.querySelectorAll('.backdrop')].at(-1) === back) close(); };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    back.remove();
+    if (vv) { vv.removeEventListener('resize', fit); vv.removeEventListener('scroll', fit); }
+    document.removeEventListener('keydown', onKey);
+    openModals = Math.max(0, openModals - 1);
+    if (!openModals) document.body.classList.remove('noscroll');
+    try { if (prevFocus && prevFocus.focus && document.contains(prevFocus)) prevFocus.focus({ preventScroll: true }); } catch { /* ignore */ }
+    if (onClose) onClose();
+  };
+  const sheet = h('div', { class: 'sheet' + (wide ? ' wide' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId },
     h('header', null,
-      h('h2', null, title),
+      h('h2', { id: titleId }, title),
       h('button', { class: 'icon-btn', 'aria-label': 'Cerrar', onclick: close }, '✕')),
     h('div', { class: 'sheet-body' }, body),
     actions ? h('footer', null, actions) : null);
-  back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
+  if (dismissable) back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', onKey);
   back.append(sheet);
   document.body.append(back);
+  openModals++;
   document.body.classList.add('noscroll');
+  if (vv) { vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); fit(); }
   return { close, sheet, back };
 }
 
@@ -72,26 +97,30 @@ export function confirmDialog(message, { ok = 'Eliminar', danger = true } = {}) 
 export function promptDialog(title, { label, value = '', type = 'text', hint } = {}) {
   return new Promise((resolve) => {
     let done = false;
-    const input = h('input', { type, value, inputmode: type === 'number' ? 'decimal' : null });
+    // Los montos van en un input de texto: el input numérico nativo rechaza la coma decimal.
+    const input = h('input', { type: type === 'number' ? 'text' : type, value, inputmode: type === 'number' ? 'decimal' : null, autocomplete: 'off' });
     const finish = (v) => { if (done) return; done = true; m.close(); resolve(v); };
-    const m = modal(title, h('label', { class: 'field' }, h('span', null, label || ''), input, hint ? h('small', null, hint) : null), {
+    const m = modal(title, h('form', { onsubmit: (e) => { e.preventDefault(); finish(input.value); } },
+      h('label', { class: 'field' }, h('span', null, label || ''), input, hint ? h('small', null, hint) : null)), {
       actions: [
         h('button', { class: 'btn', onclick: () => finish(null) }, 'Cancelar'),
         h('button', { class: 'btn primary', onclick: () => finish(input.value) }, 'Aceptar'),
       ],
       onClose: () => finish(null),
+      dismissable: false,
     });
-    setTimeout(() => input.focus(), 50);
+    input.focus();   // dentro del mismo toque: así iOS abre el teclado
   });
 }
 
 // ---- Formularios declarativos -----------------------------------------------
 // fields: [{key,label,type:'text|number|date|month|select|check|textarea|custom',options,hint,placeholder,build}]
+// Los campos con `show(valores)` aparecen o se ocultan según lo que se va eligiendo en el formulario.
 export function formModal({ title, fields, value = {}, onSave, onDelete, saveLabel = 'Guardar', extra }) {
   const getters = {};
+  const rowOf = {};
   const rows = fields.map((f) => {
-    if (f.show && !f.show(value)) return null;
-    let input, get;
+    let input, get, row;
     const v = value[f.key];
     if (f.type === 'select') {
       input = h('select', null, (typeof f.options === 'function' ? f.options(value) : f.options).map(o =>
@@ -100,7 +129,7 @@ export function formModal({ title, fields, value = {}, onSave, onDelete, saveLab
     } else if (f.type === 'check') {
       input = h('input', { type: 'checkbox', checked: !!v });
       get = () => input.checked;
-      return h('label', { class: 'field check' }, input, h('span', null, f.label), f.hint ? h('small', null, f.hint) : null);
+      row = h('label', { class: 'field check' }, input, h('span', null, f.label), f.hint ? h('small', null, f.hint) : null);
     } else if (f.type === 'textarea') {
       input = h('textarea', { rows: 3, placeholder: f.placeholder || '' }, v ?? '');
       get = () => input.value;
@@ -108,31 +137,64 @@ export function formModal({ title, fields, value = {}, onSave, onDelete, saveLab
       const c = f.build(v, value);
       input = c.el; get = c.get;
     } else {
-      input = h('input', {
-        type: f.type === 'number' ? 'text' : (f.type || 'text'), value: v ?? '', placeholder: f.placeholder || '',
+      // número precargado con coma decimal: "0.125" se leería como miles
+      const shown = f.type === 'number' && typeof v === 'number' ? String(v).replace('.', ',') : (v ?? '');
+      const inp = h('input', {
+        type: f.type === 'number' ? 'text' : (f.type || 'text'), value: shown, placeholder: f.placeholder || '',
         inputmode: f.type === 'number' ? 'decimal' : null, list: f.list || null, autocapitalize: f.type === 'text' ? 'sentences' : null,
+        autocomplete: 'off',
       });
-      get = () => (f.type === 'number' ? (input.value.trim() === '' ? null : parseNum(input.value)) : input.value.trim());
+      get = () => (f.type === 'number' ? (inp.value.trim() === '' ? null : parseNum(inp.value)) : inp.value.trim());
+      input = inp;
+      if (f.signed) {
+        // el teclado decimal del iPhone no tiene signo menos: botón ± para cambiarlo
+        const flip = h('button', { type: 'button', class: 'btn sign', 'aria-label': 'Cambiar signo', onclick: () => {
+          const t = inp.value.trim();
+          inp.value = t.startsWith('-') ? t.slice(1) : '-' + t;
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+        } }, '±');
+        input = h('div', { class: 'signed' }, inp, flip);
+      }
     }
     getters[f.key] = get;
-    return h('label', { class: 'field' }, h('span', null, f.label), input, f.hint ? h('small', null, f.hint) : null);
+    row = row || h('label', { class: 'field' }, h('span', null, f.label), input, f.hint ? h('small', null, f.hint) : null);
+    rowOf[f.key] = row;
+    return row;
   });
-  const save = async () => {
+  const current = () => {
     const out = { ...value };
     for (const f of fields) if (getters[f.key]) out[f.key] = getters[f.key]();
-    for (const f of fields) {
-      if (f.required && (out[f.key] == null || out[f.key] === '' || Number.isNaN(out[f.key]))) { toast(`Falta: ${f.label}`); return; }
-    }
-    await onSave(out);
-    m.close();
+    return out;
   };
-  const m = modal(title, h('form', { onsubmit: (e) => { e.preventDefault(); save(); } }, rows, extra), {
+  const refreshShow = () => {
+    const cur = current();
+    for (const f of fields) if (f.show) rowOf[f.key].hidden = !f.show(cur);
+  };
+  let saving = false;
+  const save = async () => {
+    if (saving) return;
+    const out = current();
+    for (const f of fields) {
+      if (f.show && !f.show(out)) continue;
+      const val = out[f.key];
+      if (f.required && (val == null || val === '' || Number.isNaN(val))) { toast(`Falta: ${f.label}`); return; }
+      if (f.type === 'number' && Number.isNaN(val)) { toast(`Número no válido: ${f.label}`); return; }
+    }
+    saving = true;
+    try { if ((await onSave(out)) !== false) m.close(); } finally { saving = false; }
+  };
+  const form = h('form', { onsubmit: (e) => { e.preventDefault(); save(); } }, rows, extra);
+  form.addEventListener('input', refreshShow);
+  form.addEventListener('change', refreshShow);
+  refreshShow();
+  const m = modal(title, form, {
     actions: [
       onDelete ? h('button', { class: 'btn danger ghost', onclick: async () => { if (await confirmDialog('¿Eliminar este registro?')) { await onDelete(value); m.close(); } } }, 'Eliminar') : null,
       h('span', { class: 'spacer' }),
       h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
       h('button', { class: 'btn primary', onclick: save }, saveLabel),
     ],
+    dismissable: false,
   });
   return m;
 }
@@ -152,10 +214,10 @@ export function download(filename, text, type = 'application/json') {
 export async function shareFile(filename, text, type = 'application/json') {
   const file = new File([text], filename, { type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: filename }); return true; } catch (e) { if (e.name === 'AbortError') return true; }
+    try { await navigator.share({ files: [file], title: filename }); return true; } catch (e) { if (e.name === 'AbortError') return false; }
   }
   download(filename, text, type);
-  return false;
+  return true;   // true = compartido o descargado; false = la persona canceló
 }
 
 // ---- Gráfico de barras simple (CSS) ---------------------------------------------

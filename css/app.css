@@ -15,6 +15,8 @@
   }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* el atributo hidden debe ganarle a reglas como .field { display: block } */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
@@ -115,7 +117,12 @@ input, select, textarea {
 }
 select { background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); outline-offset: 0; }
-input[type=checkbox] { width: 22px; height: 22px; min-height: 0; accent-color: var(--brand); }
+/* la regla general quita la apariencia nativa; el checkbox la necesita para mostrar la marca */
+input[type=checkbox] { appearance: auto; -webkit-appearance: checkbox; width: 22px; height: 22px; min-height: 0; padding: 0; accent-color: var(--brand); flex: none; }
+.signed { display: flex; gap: 8px; }
+.signed input { flex: 1; }
+.btn.sign { min-width: 52px; font-size: 20px; padding: 0 12px; }
+select:disabled { opacity: .65; }
 .field { display: block; margin-bottom: 12px; }
 .field > span:first-child { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .field small { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; }
@@ -142,7 +149,7 @@ input[type=checkbox] { width: 22px; height: 22px; min-height: 0; accent-color: v
 
 /* Modales */
 .backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .45); display: flex; align-items: flex-end; justify-content: center; }
-.sheet { background: var(--card); width: 100%; max-width: 560px; max-height: 92dvh; border-radius: 20px 20px 0 0; display: flex; flex-direction: column; animation: up .18s ease-out; }
+.sheet { background: var(--card); width: 100%; max-width: 560px; max-height: 92vh; max-height: calc(100% - 24px); border-radius: 20px 20px 0 0; display: flex; flex-direction: column; animation: up .18s ease-out; }
 @keyframes up { from { transform: translateY(24px); opacity: .5; } to { transform: none; opacity: 1; } }
 .sheet header { display: flex; align-items: center; justify-content: space-between; padding: 12px 8px 4px 16px; }
 .sheet-body { overflow-y: auto; padding: 8px 16px 12px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }

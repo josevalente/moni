@@ -80,9 +80,12 @@ export function parseAmount(str) {
   let s = String(str ?? '').trim().replace(/\s|\$/g, '');
   if (!s) return NaN;
   const hasC = s.includes(','), hasD = s.includes('.');
-  if (hasC && hasD) s = s.replace(/\./g, '').replace(',', '.');
-  else if (hasC) s = s.replace(',', '.');
-  else if (hasD && /^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  if (hasC && hasD) {
+    // el separador que va al final es el decimal: "1.234,56" (Chile) o "1,234.56" (EE.UU.)
+    s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  } else if (hasC) s = s.replace(',', '.');
+  // "12.500" o "-1.478.100" son miles; "0.125" no puede serlo (ningún número parte con 0 de miles)
+  else if (hasD && /^-?[1-9]\d{0,2}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
   const n = Number(s);
   return Number.isFinite(n) ? n : NaN;
 }
@@ -90,7 +93,7 @@ export function parseAmount(str) {
 // ---- Tipos de cambio -----------------------------------------------------
 
 let rateIdx = null;
-db.subscribe(() => { rateIdx = null; });
+db.subscribe((changed) => { if (!changed || changed.has('rates')) rateIdx = null; });
 
 function buildRates() {
   rateIdx = new Map();
@@ -161,7 +164,9 @@ export function accountBalances() {
 export function netWorth() {
   const bal = accountBalances();
   let cash = 0, cards = 0, missing = new Set();
+  const noValue = (cur) => currencyInfo(cur).convertible === false;   // millas, puntos: no suman al patrimonio
   for (const a of accounts()) {
+    if (noValue(a.currency)) continue;
     const v = bal.get(a.id) || 0;
     const r = rateFor(a.currency, todayStr());
     if (r == null) missing.add(a.currency);
@@ -178,7 +183,7 @@ export function netWorth() {
   }
   let debts = 0;
   for (const d of debtSummaries()) {
-    if (d.excludeNW) continue;
+    if (d.excludeNW || noValue(d.currency)) continue;
     const r = rateFor(d.currency, todayStr());
     if (r == null) missing.add(d.currency);
     debts += (d.direction === 'owe' ? -1 : 1) * d.balance * (r ?? 1);
@@ -361,10 +366,12 @@ export function spendingByCategory(ym, mode = 'total', pid = null) {
   return { rows, total };
 }
 
-export function incomeOfMonth(ym) {
+// Ingresos del mes; con pid, solo los que recibió esa persona (para "Mi parte").
+export function incomeOfMonth(ym, pid = null) {
   let t = 0;
   for (const tx of txsInMonth(ym)) {
     if (tx.kind !== 'in') continue;
+    if (pid && tx.paidBy !== pid) continue;
     const cat = category(tx.categoryId);
     if (cat && cat.kind === 'income') t += txBase(tx);
   }

@@ -7,16 +7,22 @@ export function txRow(tx, { showDate = false } = {}) {
   const cat = M.category(tx.categoryId);
   const acc = M.account(tx.accountId);
   const ppl = M.people();
-  let title, sub = [], sign = 0, cls = '';
+  const base = M.base();
+  let title, sub = [], cls = '', amount;
   if (tx.kind === 'transfer') {
-    title = `${(acc || {}).name || '?'} → ${(M.account(tx.toAccountId) || {}).name || '?'}`; cls = 'transfer';
+    const to = M.account(tx.toAccountId);
+    title = `${(acc || {}).name || '?'} → ${(to || {}).name || '?'}`; cls = 'transfer';
+    amount = M.fmt(tx.amount, tx.currency) + (tx.toAmount != null && to && to.currency !== tx.currency ? ` → ${M.fmt(tx.toAmount, to.currency)}` : '');
   } else if (tx.kind === 'settle') {
     title = `Pago ${M.personName(tx.paidBy)} → ${M.personName(tx.to)}`;
     sub.push(`cierre ${M.monthName(M.settleMonthOf(tx))}`); cls = 'transfer';
+    if (acc) sub.push(acc.name);
+    amount = M.fmt(tx.amount, tx.currency);
   } else {
     title = (cat ? ((cat.icon ? cat.icon + ' ' : '') + cat.name) : 'Sin categoría');
-    sign = tx.kind === 'in' ? 1 : -1;
+    const sign = tx.kind === 'in' ? 1 : -1;
     cls = sign > 0 ? 'pos' : '';
+    amount = M.fmt(sign * tx.amount, tx.currency, { sign: sign > 0 });
   }
   if (tx.desc) sub.unshift(tx.desc);
   if (tx.kind !== 'transfer' && tx.kind !== 'settle') {
@@ -26,13 +32,12 @@ export function txRow(tx, { showDate = false } = {}) {
     else if (acc && ppl.length > 0) sub.push(acc.name);
   }
   if (tx.tag) sub.push('#' + tx.tag);
-  const base = M.base();
   return h('button', { class: 'row tx ' + cls, onclick: () => openTxForm(tx) },
     h('div', { class: 'main' },
       h('div', { class: 'title' }, title),
       h('div', { class: 'sub' }, (showDate ? tx.date.slice(8) + '/' + tx.date.slice(5, 7) + ' · ' : '') + sub.join(' · '))),
     h('div', { class: 'amt' },
-      h('div', null, M.fmt(sign * tx.amount, tx.currency, { sign: sign > 0 })),
+      h('div', null, amount),
       tx.currency !== base ? h('div', { class: 'sub' }, `≈ ${M.fmt(M.txBase(tx), base)}`) : null));
 }
 
@@ -40,46 +45,54 @@ const state = { ym: null, q: '', filter: 'all' };
 
 export function renderTxs(root) {
   if (!state.ym) state.ym = M.curYm();
-  const search = h('input', { type: 'search', placeholder: 'Buscar en todo el historial…', value: state.q });
-  search.addEventListener('input', () => { state.q = search.value; draw(); });
+  const search = h('input', { type: 'search', placeholder: 'Buscar en todo el historial…', value: state.q, 'aria-label': 'Buscar movimientos' });
+  let timer;
+  search.addEventListener('input', () => { state.q = search.value; clearTimeout(timer); timer = setTimeout(draw, 160); });
   const list = h('div', { class: 'list' });
   const head = h('div', { class: 'monthnav' });
 
   const filters = [['all', 'Todos'], ['out', 'Gastos'], ['in', 'Ingresos'], ['shared', 'Compartidos'], ['other', 'Transf./pagos']];
-  const chips = h('div', { class: 'chips scroll' });
+  const chips = h('div', { class: 'chips scroll', role: 'group', 'aria-label': 'Filtro' });
 
-  function match(tx) {
+  function match(tx, words) {
     const f = state.filter;
     if (f === 'out' && tx.kind !== 'out') return false;
     if (f === 'in' && tx.kind !== 'in') return false;
     if (f === 'shared' && tx.alloc !== 'shared') return false;
     if (f === 'other' && tx.kind !== 'transfer' && tx.kind !== 'settle') return false;
-    const q = state.q.trim().toLowerCase();
-    if (q) {
+    if (words.length) {
       const cat = M.category(tx.categoryId);
       const hay = `${tx.desc || ''} ${cat ? cat.name : ''} ${tx.tag || ''} ${tx.amount} ${(M.account(tx.accountId) || {}).name || ''}`.toLowerCase();
-      if (!q.split(/\s+/).every(w => hay.includes(w))) return false;
+      // "12.500" también encuentra el monto 12500
+      if (!words.every(w => hay.includes(w.text) || (w.num != null && Math.abs(tx.amount - w.num) < 0.005))) return false;
     }
     return true;
   }
 
   function draw() {
     const q = state.q.trim();
-    fill(chips, ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), onclick: () => { state.filter = k; draw(); } }, l)));
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean).map(text => ({ text, num: /^-?[\d.,]+$/.test(text) && Number.isFinite(M.parseAmount(text)) ? M.parseAmount(text) : null }));
+    fill(chips, ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), 'aria-pressed': String(state.filter === k), onclick: () => { state.filter = k; draw(); } }, l)));
     fill(head, q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [
       h('button', { class: 'icon-btn', onclick: () => { state.ym = M.addMonths(state.ym, -1); draw(); }, 'aria-label': 'Mes anterior' }, '‹'),
       h('strong', null, M.monthName(state.ym)),
       h('button', { class: 'icon-btn', onclick: () => { state.ym = M.addMonths(state.ym, 1); draw(); }, 'aria-label': 'Mes siguiente' }, '›'),
     ]);
     let txs = q ? db.all('tx') : M.txsInMonth(state.ym);
-    txs = M.sortTx(txs.filter(match));
+    txs = M.sortTx(txs.filter(t => match(t, words)));
     const total = txs.length;
-    if (q) txs = txs.slice(0, 300);
-    const out = [];
-    let last = '';
+    // totales sobre todo lo encontrado; solo gastos e ingresos reales (no inversión, préstamo ni ajuste)
     let sumOut = 0, sumIn = 0;
     for (const tx of txs) {
-      if (tx.kind === 'out') sumOut += M.txBase(tx); else if (tx.kind === 'in') sumIn += M.txBase(tx);
+      const cat = M.category(tx.categoryId);
+      if (!cat) continue;
+      if (cat.kind === 'expense') sumOut += (tx.kind === 'in' ? -1 : 1) * M.txBase(tx);
+      else if (cat.kind === 'income' && tx.kind === 'in') sumIn += M.txBase(tx);
+    }
+    const shown = q ? txs.slice(0, 300) : txs;
+    const out = [];
+    let last = '';
+    for (const tx of shown) {
       if (tx.date !== last) {
         last = tx.date;
         const d = new Date(tx.date + 'T12:00:00');
@@ -87,10 +100,10 @@ export function renderTxs(root) {
       }
       out.push(txRow(tx));
     }
-    if (!txs.length) out.push(h('p', { class: 'empty' }, q ? 'Nada coincide con la búsqueda.' : 'Sin movimientos este mes.'));
+    if (!shown.length) out.push(h('p', { class: 'empty' }, q ? 'Nada coincide con la búsqueda.' : 'Sin movimientos este mes.'));
     if (q && total > 300) out.push(h('p', { class: 'muted center' }, `Mostrando 300 de ${total}. Afina la búsqueda.`));
     fill(list, ...out);
-    summary.textContent = txs.length ? `${total} mov. · gastos ${M.fmt(sumOut, M.base())} · ingresos ${M.fmt(sumIn, M.base())}` : '';
+    summary.textContent = total ? `${total} mov. · gastos ${M.fmt(sumOut, M.base())} · ingresos ${M.fmt(sumIn, M.base())}` : '';
   }
   const summary = h('div', { class: 'muted center small' });
   fill(root, h('div', { class: 'toolbar' }, search, chips), head, summary, list);

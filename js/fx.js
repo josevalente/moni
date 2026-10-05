@@ -23,7 +23,11 @@ export async function refreshRates({ force = false } = {}) {
       for (const p of j.serie || []) {
         const date = p.fecha.slice(0, 10);
         for (const [cur, c] of Object.entries(MAP)) {
-          if (c === code && cur !== base()) recs.push({ id: `${cur}|${date}`, cur, date, rate: p.valor });
+          if (c !== code || cur === base()) continue;
+          const id = `${cur}|${date}`;
+          const cur0 = db.get('rates', id);
+          if (cur0 && (cur0.manual || cur0.rate === p.valor)) continue;   // no pisa tasas manuales ni reescribe iguales
+          recs.push({ id, cur, date, rate: p.valor });
         }
       }
     } catch { failed++; }

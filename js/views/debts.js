@@ -42,7 +42,7 @@ function editDebt(d) {
     },
     onDelete: !isNew ? async (v) => {
       await db.del('debts', v.id);
-      for (const e of db.all('debtEntries').filter(x => x.debtId === v.id)) await db.del('debtEntries', e.id);
+      await db.delMany('debtEntries', db.all('debtEntries').filter(x => x.debtId === v.id).map(x => x.id));
     } : null,
   });
 }
@@ -63,13 +63,13 @@ function openDetail(id) {
       h('div', { class: 'actions' },
         h('button', { class: 'btn primary', onclick: () => addEntry(d, -1) }, 'Registrar pago'),
         h('button', { class: 'btn', onclick: () => addEntry(d, 1) }, 'Aumentar'),
-        h('button', { class: 'btn ghost', onclick: () => editDebt(d) }, 'Editar')),
+        h('button', { class: 'btn ghost', onclick: () => editDebt(db.get('debts', d.id)) }, 'Editar')),
       h('h4', null, 'Historial'),
       entries.map(e => h('button', {
         class: 'row', onclick: () => formModal({
           title: 'Editar registro', value: e,
           fields: [
-            { key: 'amount', label: 'Monto (negativo = pago)', type: 'number', required: true },
+            { key: 'amount', label: 'Monto (negativo = pago; usa ±)', type: 'number', required: true, signed: true },
             { key: 'date', label: 'Fecha', type: 'date' },
             { key: 'note', label: 'Nota', type: 'text' },
           ],

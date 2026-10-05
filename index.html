@@ -29,5 +29,23 @@
   </nav>
   <noscript>Moni necesita JavaScript.</noscript>
   <script type="module" src="js/main.js"></script>
+  <script>
+    // Si la app no arrancó (por ejemplo, una actualización a medias en caché), se ofrece recargarla
+    // desde la red. Los datos están en IndexedDB y no se tocan.
+    setTimeout(function () {
+      if (window.__moniStarted) return;
+      var app = document.getElementById('app');
+      app.innerHTML = '<div class="welcome"><h1>Moni</h1><p>La app no terminó de cargar.</p>' +
+        '<p class="muted small">Tus datos no se borran con esto.</p>' +
+        '<div class="actions col"><button class="btn primary big" id="moni-reset">Recargar la app</button></div></div>';
+      document.getElementById('moni-reset').onclick = function () {
+        var done = function () { location.reload(); };
+        var p = [];
+        if (navigator.serviceWorker) p.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+        if (window.caches) p.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+        Promise.all(p).then(done, done);
+      };
+    }, 8000);
+  </script>
 </body>
 </html>

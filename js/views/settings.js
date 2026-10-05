@@ -2,7 +2,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import * as FX from '../fx.js';
-import { fill, h, toast, formModal, confirmDialog, promptDialog, parseNum, shareFile } from '../ui.js';
+import { fill, h, modal, toast, formModal, confirmDialog, promptDialog, parseNum, shareFile } from '../ui.js';
 import { openSplitEditor } from './close.js';
 import { renderInvest } from './invest.js';
 import { renderDebts } from './debts.js';
@@ -38,6 +38,7 @@ function editCategory(c) {
       { key: 'splitMode', label: 'Cómo se reparte lo compartido', type: 'select', options: MODES, show: (v) => v.defaultAlloc === 'shared' || (v.splitMode && v.splitMode !== 'prop') },
       {
         key: 'fixedPct', label: 'Porcentajes fijos', type: 'custom',
+        show: (v) => v.splitMode === 'fixed' && (v.defaultAlloc === 'shared' || v.splitMode !== 'prop'),
         build: (v) => {
           const ins = {};
           const el = h('div', { class: 'grid-people' }, people.map(p => {
@@ -45,7 +46,7 @@ function editCategory(c) {
             ins[p.id] = inp;
             return h('label', { class: 'field' }, h('span', null, `${p.name} (%)`), inp);
           }));
-          return { el: h('div', null, h('small', null, 'Solo se usa si eliges "porcentaje fijo". Ej: 80 / 20.'), el), get: () => {
+          return { el: h('div', null, h('small', null, 'Ej: 80 / 20. Se normaliza si no suma 100.'), el), get: () => {
             const o = {}; let any = false;
             for (const p of people) { const n = parseNum(ins[p.id].value); if (Number.isFinite(n)) { o[p.id] = n / 100; any = true; } }
             return any ? o : undefined;
@@ -54,7 +55,11 @@ function editCategory(c) {
       },
       { key: 'archived', label: 'Archivada (no aparece al registrar)', type: 'check' },
     ],
-    onSave: async (v) => { if (v.splitMode !== 'fixed') delete v.fixedPct; await db.put('categories', v); toast('Categoría guardada'); },
+    onSave: async (v) => {
+      if (v.splitMode !== 'fixed') delete v.fixedPct;
+      else if (!v.fixedPct || !Object.values(v.fixedPct).some(x => x > 0)) { toast('Indica los porcentajes fijos'); return false; }
+      await db.put('categories', v); toast('Categoría guardada');
+    },
     onDelete: !isNew ? async (v) => {
       const used = db.all('tx').some(t => t.categoryId === v.id);
       if (used) { toast('Tiene movimientos: archívala en vez de eliminarla'); return; }
@@ -99,7 +104,7 @@ function editAccount(a) {
       { key: 'bank', label: 'Banco / institución', type: 'text' },
       { key: 'type', label: 'Tipo', type: 'select', options: ACC_TYPES },
       { key: 'currency', label: 'Moneda', type: 'select', options: M.settings().currencies.map(c => ({ v: c.code, l: c.code })) },
-      ...(isNew ? [{ key: '_opening', label: 'Saldo inicial (negativo si es deuda)', type: 'number' }] : []),
+      ...(isNew ? [{ key: '_opening', label: 'Saldo inicial', type: 'number', signed: true, hint: 'Usa ± para un saldo negativo (por ejemplo, la deuda de una tarjeta).' }] : []),
       { key: 'archived', label: 'Archivada (oculta, no suma al patrimonio)', type: 'check' },
     ],
     onSave: async (v) => {
@@ -143,9 +148,16 @@ function renderPeople(root) {
       h('div', { class: 'row-actions' },
         h('button', { class: 'btn small', onclick: async () => { const n = await promptDialog('Renombrar', { label: 'Nombre', value: p.name }); if (n && n.trim()) await db.put('people', { ...p, name: n.trim() }); } }, 'Renombrar'),
         p.id !== me ? h('button', { class: 'btn small', onclick: () => { M.setMeId(p.id); toast(`Este dispositivo ahora registra como ${p.name}`); renderPeople(root); } }, 'Soy yo') : null,
-        p.id !== M.ownerId() ? h('button', { class: 'btn small', onclick: async () => { await db.put('settings', { ...M.settings(), ownerId: p.id }); } }, 'Dueño cuentas') : null)))),
+        p.id !== M.ownerId() ? h('button', { class: 'btn small', onclick: async () => {
+          // cambia el sentido de los pagos entre ustedes registrados en cuentas: se confirma
+          if (await confirmDialog(`Las cuentas pasarán a ser de ${p.name}. Los pagos entre ustedes registrados en una cuenta cambiarán de sentido en los saldos. ¿Continuar?`, { ok: 'Cambiar dueño', danger: false })) {
+            await db.put('settings', { ...M.settings(), ownerId: p.id });
+          }
+        } }, 'Dueño cuentas') : null)))),
   h('section', { class: 'card' }, h('h3', null, '¿Cómo funciona con dos teléfonos?'),
-    h('p', { class: 'muted' }, 'Cada persona puede instalar la app y registrar sus gastos eligiendo "Lo pagó". Para juntar los datos usen Respaldo › Combinar: el archivo de uno se mezcla con el del otro sin duplicar ni perder cambios. Si solo una persona lleva todo, basta con elegir quién pagó en cada movimiento.')));
+    h('p', { class: 'muted' }, 'Si solo una persona lleva todo, basta con elegir quién pagó en cada movimiento.'),
+    h('p', { class: 'muted' }, 'Para que cada uno registre en su teléfono: ', h('strong', null, 'el segundo teléfono debe partir importando un respaldo del primero'),
+      ' (no "Empezar desde cero"), así comparten personas, cuentas y categorías. Luego, en ese teléfono elige "Soy yo" en su nombre. Para juntar lo registrado usen Respaldo › Combinar: se mezcla sin duplicar ni perder cambios.')));
 }
 
 // ---------------------------------------------------------------- reparto
@@ -196,7 +208,7 @@ function renderCurrencies(root) {
     h('button', { class: 'btn', onclick: () => formModal({
       title: 'Nueva moneda', value: { decimals: 2, convertible: true },
       fields: [{ key: 'code', label: 'Código (ej: GBP)', type: 'text', required: true }, { key: 'symbol', label: 'Símbolo', type: 'text', required: true }, { key: 'decimals', label: 'Decimales', type: 'number' }, { key: 'convertible', label: 'Se convierte a la moneda base', type: 'check' }],
-      onSave: async (v) => { v.code = v.code.toUpperCase(); if (st.currencies.some(c => c.code === v.code)) { toast('Ya existe'); return; } await db.put('settings', { ...st, currencies: [...st.currencies, { code: v.code, symbol: v.symbol, decimals: v.decimals ?? 2, convertible: !!v.convertible }] }); renderCurrencies(root); },
+      onSave: async (v) => { v.code = v.code.toUpperCase(); if (st.currencies.some(c => c.code === v.code)) { toast('Ya existe'); return false; } await db.put('settings', { ...st, currencies: [...st.currencies, { code: v.code, symbol: v.symbol, decimals: v.decimals ?? 2, convertible: !!v.convertible }] }); renderCurrencies(root); },
     }) }, '＋ Agregar moneda')));
 }
 
@@ -207,13 +219,20 @@ const fileInput = (accept, onFile) => {
   document.body.append(i); i.click(); setTimeout(() => i.remove(), 60000);
 };
 
+// CSV con ";" y coma decimal: así Excel en español lo abre separado en columnas.
 export function exportCsv() {
-  const q = (v) => { v = v == null ? '' : String(v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-  const rows = [['fecha', 'tipo', 'monto', 'moneda', 'categoria', 'cuenta', 'cuenta_destino', 'pagado_por', 'reparto', 'descripcion', 'etiqueta']];
+  const q = (v) => {
+    v = v == null ? '' : (typeof v === 'number' ? String(Math.round(v * 1e6) / 1e6).replace('.', ',') : String(v));
+    return /[";\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  };
+  const KIND = { out: 'gasto', in: 'ingreso', transfer: 'transferencia', settle: 'pago entre ustedes' };
+  const alloc = (t) => (t.alloc === 'shared' ? 'compartido' : t.alloc && t.alloc.startsWith('p:') ? `solo de ${M.personName(t.alloc.slice(2))}` : t.kind === 'out' || t.kind === 'in' ? 'de quien pagó' : '');
+  const rows = [['fecha', 'tipo', 'monto', 'moneda', `monto_${M.base().toLowerCase()}`, 'categoria', 'cuenta', 'cuenta_destino', 'monto_destino', 'pagado_por', 'recibe', 'reparto', 'cierre', 'descripcion', 'etiqueta']];
   for (const t of M.sortTx(db.all('tx'))) {
-    rows.push([t.date, t.kind, t.amount, t.currency, (M.category(t.categoryId) || {}).name, (M.account(t.accountId) || {}).name, (M.account(t.toAccountId) || {}).name, M.personName(t.paidBy), t.alloc || '', t.desc, t.tag]);
+    rows.push([t.date, KIND[t.kind] || t.kind, t.amount, t.currency, M.txBase(t), (M.category(t.categoryId) || {}).name, (M.account(t.accountId) || {}).name,
+      (M.account(t.toAccountId) || {}).name, t.toAmount, M.personName(t.paidBy), t.to ? M.personName(t.to) : '', alloc(t), t.kind === 'settle' ? M.settleMonthOf(t) : '', t.desc, t.tag]);
   }
-  return rows.map(r => r.map(q).join(',')).join('\n');
+  return rows.map(r => r.map(q).join(';')).join('\n');
 }
 
 function renderBackup(root) {
@@ -221,10 +240,29 @@ function renderBackup(root) {
   const stamp = () => new Date().toISOString().slice(0, 10);
   const doExport = async () => {
     const json = JSON.stringify(db.exportAll());
-    await shareFile(`moni-respaldo-${stamp()}.json`, json);
-    try { localStorage.setItem('moni.lastBackup', new Date().toISOString()); } catch { /* ignore */ }
+    // solo cuenta como respaldo si no se canceló la hoja de compartir
+    if (await shareFile(`moni-respaldo-${stamp()}.json`, json)) {
+      try { localStorage.setItem('moni.lastBackup', new Date().toISOString()); } catch { /* ignore */ }
+    }
     renderBackup(root);
   };
+  // iOS puede borrar datos de sitios web si falta espacio, salvo que el almacenamiento sea persistente
+  const storageLine = h('p', { class: 'muted small' }, 'Revisando almacenamiento…');
+  const persistBtn = h('button', { class: 'btn small', hidden: true, onclick: async () => {
+    const ok = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : false;
+    toast(ok ? 'Almacenamiento persistente activado' : 'El sistema no lo permitió; mantén tus respaldos al día');
+    renderBackup(root);
+  } }, 'Pedir almacenamiento persistente');
+  (async () => {
+    try {
+      const st = navigator.storage;
+      const p = st && st.persisted ? await st.persisted() : null;
+      const e = st && st.estimate ? await st.estimate() : null;
+      storageLine.textContent = (p === true ? 'Almacenamiento persistente: sí ✓' : p === false ? 'Almacenamiento persistente: no — el sistema podría borrar los datos si falta espacio' : 'Almacenamiento persistente: no se puede saber en este navegador')
+        + (e && e.usage ? ` · en uso ${(e.usage / 1048576).toFixed(1)} MB` : '');
+      persistBtn.hidden = p !== false;
+    } catch { storageLine.textContent = ''; }
+  })();
   const doImport = (mode) => fileInput('.json,application/json', async (f) => {
     let payload;
     try { payload = JSON.parse(await f.text()); } catch { toast('El archivo no es un JSON válido'); return; }
@@ -233,13 +271,27 @@ function renderBackup(root) {
       const s = await db.importAll(payload, mode);
       toast(mode === 'replace' ? 'Datos cargados' : `Combinado: ${s.added} nuevos, ${s.updated} actualizados`);
       if (mode === 'replace') location.hash = '#/';
-    } catch (e) { toast(e.message || 'No se pudo importar'); }
+    } catch (e) {
+      // el mensaje es largo y la decisión importa: se muestra en una ventana, no en un aviso fugaz
+      const m = modal('No se importó nada', h('p', null, e.message || 'No se pudo importar el archivo.'), {
+        actions: [
+          h('button', { class: 'btn', onclick: () => m.close() }, 'Entendido'),
+          e.code === 'FOREIGN' ? h('button', { class: 'btn danger', onclick: async () => {
+            m.close();
+            if (await confirmDialog('Se reemplazarán TODOS los datos de este teléfono por los del archivo. ¿Continuar?', { ok: 'Reemplazar' })) {
+              await db.importAll(payload, 'replace'); toast('Datos cargados'); location.hash = '#/';
+            }
+          } }, 'Reemplazar todo con este archivo') : null,
+        ],
+      });
+    }
   });
   const counts = { 'Movimientos': db.count('tx'), 'Categorías': db.count('categories'), 'Cuentas': db.count('accounts'), 'Inversiones': db.count('investments') };
   fill(root, back(), h('h2', null, 'Respaldo y datos'),
     h('section', { class: 'card' },
       h('p', null, 'Tus datos viven solo en este dispositivo. ', h('strong', null, 'Haz un respaldo seguido'), ' y guárdalo en Archivos / iCloud Drive.'),
       h('p', { class: 'muted' }, last ? `Último respaldo: ${new Date(last).toLocaleString('es-CL')}` : 'Aún no has hecho un respaldo.'),
+      storageLine, persistBtn,
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: doExport }, 'Exportar respaldo (JSON)'), h('button', { class: 'btn', onclick: () => shareFile(`moni-movimientos-${stamp()}.csv`, '﻿' + exportCsv(), 'text/csv') }, 'Exportar movimientos (CSV)'))),
     h('section', { class: 'card' }, h('h3', null, 'Importar'),
       h('p', { class: 'muted' }, 'Combinar mezcla un archivo con tus datos actuales: por cada registro gana el cambio más reciente. Sirve para juntar lo que registran dos personas en teléfonos distintos.'),
@@ -247,15 +299,21 @@ function renderBackup(root) {
     h('section', { class: 'card' }, h('h3', null, 'En este dispositivo'),
       Object.entries(counts).map(([k, v]) => h('div', { class: 'row static' }, h('div', { class: 'main' }, h('div', { class: 'title' }, k)), h('div', { class: 'amt' }, String(v)))),
       h('div', { class: 'actions' }, h('button', { class: 'btn danger ghost', onclick: async () => {
-        if (await confirmDialog('Se borrarán todos los datos de este dispositivo. Haz un respaldo antes. ¿Continuar?', { ok: 'Borrar todo' })) { await db.wipe(); await M.seedDefaults(); location.hash = '#/'; toast('Datos borrados'); }
+        if (await confirmDialog('Se borrarán todos los datos de este dispositivo. Haz un respaldo antes. ¿Continuar?', { ok: 'Borrar todo' })) {
+          await db.wipe();
+          // también las preferencias de este teléfono. Se vuelve a la bienvenida (importar un respaldo o empezar
+          // de cero) en vez de crear personas nuevas que después se duplicarían al combinar
+          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+          location.hash = '#/'; toast('Datos borrados');
+        }
       } }, 'Borrar todos los datos'))));
 }
 
 // ---------------------------------------------------------------- menú
 export function renderMore(root, sub) {
   const subs = { categorias: renderCategories, cuentas: renderAccounts, personas: renderPeople, reparto: renderSplits, monedas: renderCurrencies, respaldo: renderBackup };
-  if (sub === 'inversiones') { fill(root, ); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
-  if (sub === 'deudas') { fill(root, ); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
+  if (sub === 'inversiones') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
+  if (sub === 'deudas') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
   if (subs[sub]) { const r = subs[sub](root); return typeof r === 'function' ? r : () => subs[sub](root); }
   const item = (to, icon, title, sub2) => h('a', { class: 'row link', href: '#/mas/' + to }, h('div', { class: 'icon' }, icon), h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub2)), h('div', { class: 'chev' }, '›'));
   fill(root, 

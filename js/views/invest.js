@@ -67,7 +67,7 @@ function editFund(f) {
     onSave: (v) => db.put('investments', v),
     onDelete: f && f.id ? async (v) => {
       await db.del('investments', v.id);
-      for (const e of db.all('invEntries').filter(x => x.invId === v.id)) await db.del('invEntries', e.id);
+      await db.delMany('invEntries', db.all('invEntries').filter(x => x.invId === v.id).map(x => x.id));
     } : null,
   });
 }
@@ -94,7 +94,7 @@ function openDetail(id) {
           title: 'Editar registro', value: e,
           fields: [
             { key: 'kind', label: 'Tipo', type: 'select', options: Object.entries(KIND_LABEL).map(([v, l]) => ({ v, l })) },
-            { key: 'amount', label: 'Monto', type: 'number', required: true },
+            { key: 'amount', label: 'Monto', type: 'number', required: true, signed: true },
             { key: 'date', label: 'Fecha', type: 'date', required: true },
             { key: 'note', label: 'Nota', type: 'text' },
           ],
@@ -103,7 +103,7 @@ function openDetail(id) {
       },
       h('div', { class: 'main' }, h('div', { class: 'title' }, KIND_LABEL[e.kind]), h('div', { class: 'sub' }, `${e.date}${e.note ? ' · ' + e.note : ''}`)),
       h('div', { class: 'amt ' + (e.kind === 'withdraw' || e.amount < 0 ? 'neg' : '') }, M.fmt(e.kind === 'withdraw' ? -e.amount : e.amount, s.currency)))),
-      h('div', { class: 'actions' }, h('button', { class: 'btn ghost', onclick: () => editFund(s) }, 'Editar fondo')));
+      h('div', { class: 'actions' }, h('button', { class: 'btn ghost', onclick: () => editFund(db.get('investments', s.id)) }, 'Editar fondo')));
   };
   const unsub = db.subscribe(draw);
   m = modal('Inversión', body, { wide: true, onClose: unsub });

@@ -51,7 +51,7 @@ function welcome() {
     h('div', { class: 'actions col' },
       h('button', { class: 'btn primary big', onclick: fileBtn }, 'Importar mis datos (.json)'),
       h('button', { class: 'btn big', onclick: async () => { await M.seedDefaults(); draw(); } }, 'Empezar desde cero')),
-    h('p', { class: 'muted small' }, 'Si vienes de tu planilla, genera el archivo con tools/migrate.py y pásalo al teléfono por AirDrop o iCloud Drive.'));
+    h('p', { class: 'muted small' }, 'Si ya usan Moni en otro teléfono, importa un respaldo de ese teléfono (Más › Respaldo › Exportar) en vez de empezar desde cero: así podrán combinar sus datos.'));
 }
 
 function draw() {
@@ -86,14 +86,45 @@ window.addEventListener('hashchange', draw);
 window.addEventListener('online', () => { document.body.classList.remove('offline'); FX.refreshRates().catch(() => {}); });
 window.addEventListener('offline', () => document.body.classList.add('offline'));
 
+// Nada falla en silencio: si una escritura no quedó guardada, la pantalla ya se revirtió y se avisa.
+window.addEventListener('moni:dberror', (e) => {
+  toast('No se pudo guardar en el teléfono: ' + ((e.detail && (e.detail.message || e.detail.name)) || 'error desconocido') + '. Inténtalo de nuevo.', { ms: 8000 });
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  if (r && r.name === 'AbortError') return;
+  console.error(r);
+  toast('Ocurrió un error: ' + ((r && r.message) || r), { ms: 6000 });
+});
+
+// Recuperación si la app no puede arrancar (por ejemplo, archivos de versiones mezcladas en caché).
+async function resetAppCache() {
+  try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch { /* ignore */ }
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch { /* ignore */ }
+  location.reload();
+}
+
 async function start() {
   await db.open();
   document.getElementById('fab').addEventListener('click', () => openTxForm(null));
   if (!navigator.onLine) document.body.classList.add('offline');
   draw();
+  window.__moniStarted = true;
   FX.refreshRates().catch(() => {});
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) toast('Hay una versión nueva de Moni.', { label: 'Actualizar', onAction: () => location.reload(), ms: 15000 });
+    });
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 }
-start().catch((e) => { fill(app, h('pre', { class: 'pre' }, 'Error al iniciar: ' + (e && e.message))); console.error(e); });
+start().catch((e) => {
+  console.error(e);
+  window.__moniStarted = true;
+  fill(app, h('div', { class: 'welcome' },
+    h('h1', null, 'Moni'),
+    h('p', null, 'No se pudo iniciar: ' + ((e && e.message) || e)),
+    h('p', { class: 'muted small' }, 'Tus datos no se borran con esto. Si el problema sigue, recarga la app desde la red.'),
+    h('div', { class: 'actions col' }, h('button', { class: 'btn primary big', onclick: resetAppCache }, 'Recargar la app'))));
+});

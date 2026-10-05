@@ -19,9 +19,13 @@ export function renderHome(root) {
   const led = M.ledger(ym);
   const sum = settleText(led.balance, ym);
   const spend = M.spendingByCategory(ym, st.mode);
-  const income = M.incomeOfMonth(ym);
+  const income = M.incomeOfMonth(ym, st.mode === 'mine' ? M.meId() : null);
   const balances = M.accountBalances();
-  const recents = M.sortTx(db.all('tx').filter(t => t.kind !== 'settle')).slice(0, 6);
+  // últimos 6: se ordenan solo los de las últimas semanas (no los ~7.000 del historial)
+  const cut = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
+  let cand = db.all('tx').filter(t => t.kind !== 'settle' && t.date >= cut);
+  if (cand.length < 6) cand = db.all('tx').filter(t => t.kind !== 'settle');
+  const recents = M.sortTx(cand).slice(0, 6);
   const multi = M.people().length > 1;
 
   const accRows = M.accounts().map(a => ({ a, v: balances.get(a.id) || 0 })).filter(x => Math.abs(x.v) > 0.004 || x.a.type !== 'credit');
