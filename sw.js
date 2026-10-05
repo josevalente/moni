@@ -1,7 +1,7 @@
 // Service worker: la app completa queda guardada para funcionar sin conexión.
 // Solo se guardan los archivos de la lista SHELL (nunca datos). Sube VERSION cuando cambies
 // archivos para que los teléfonos descarguen la versión nueva.
-const VERSION = 'moni-v2';
+const VERSION = 'moni-v3';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/db.js', './js/model.js', './js/fx.js', './js/ui.js',

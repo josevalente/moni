@@ -1,6 +1,6 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { h, bars } from '../ui.js';
+import { fill, h, bars } from '../ui.js';
 import { txRow } from './txs.js';
 
 const st = { mode: 'total', ym: null };
@@ -30,7 +30,7 @@ export function renderHome(root) {
     h('strong', null, M.monthName(ym)),
     h('button', { class: 'icon-btn', 'aria-label': 'Mes siguiente', onclick: () => { st.ym = M.addMonths(ym, 1); renderHome(root); } }, '›'));
 
-  root.replaceChildren(
+  fill(root, 
     h('section', { class: 'card hero' },
       h('div', { class: 'label' }, 'Patrimonio neto'),
       h('div', { class: 'big' }, M.fmt(nw.total, base)),

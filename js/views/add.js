@@ -1,7 +1,7 @@
 // Formulario de movimiento: captura rápida (nuevo) y edición.
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { h, modal, toast, parseNum, confirmDialog } from '../ui.js';
+import { fill, h, modal, toast, parseNum, confirmDialog } from '../ui.js';
 
 const LAST_ACC = 'moni.lastAccount';
 const KIND_CATS = { out: ['expense', 'loan', 'invest', 'adjust'], in: ['income', 'loan', 'invest', 'adjust', 'expense'] };
@@ -29,12 +29,12 @@ export function categoryPicker(kind, current, onPick) {
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(c);
     }
-    list.replaceChildren(...[...groups.entries()].map(([g, cs]) => h('div', { class: 'cat-group' },
+    fill(list, ...[...groups.entries()].map(([g, cs]) => h('div', { class: 'cat-group' },
       h('h4', null, g),
       h('div', { class: 'chips' }, cs.map(c => h('button', {
         type: 'button', class: 'chip' + (c.id === current ? ' on' : ''), onclick: () => { onPick(c.id); m.close(); },
       }, (c.icon ? c.icon + ' ' : '') + c.name))))));
-    if (!groups.size) list.replaceChildren(h('p', { class: 'muted' }, 'Sin resultados. Puedes crear categorías en Más › Categorías.'));
+    if (!groups.size) fill(list, h('p', { class: 'muted' }, 'Sin resultados. Puedes crear categorías en Más › Categorías.'));
   };
   search.addEventListener('input', draw);
   m = modal('Categoría', h('div', null, search, list));
@@ -90,7 +90,7 @@ export function openTxForm(existing, defaults = {}) {
   function updateFx() {
     const box = root.querySelector('.fxline');
     if (!box) return;
-    if (s.currency === base || s.kind === 'transfer' && !s.toAccountId) { box.replaceChildren(); return; }
+    if (s.currency === base || s.kind === 'transfer' && !s.toAccountId) { fill(box, ); return; }
     const auto = M.rateFor(s.currency, s.date);
     const rate = s.fxTouched && s.fx != null ? s.fx : auto;
     const a = parseNum(s.amount);
@@ -101,7 +101,7 @@ export function openTxForm(existing, defaults = {}) {
       return Number.isFinite(a) && r ? `≈ ${M.fmt(a * r, base)}` : (r == null ? 'Sin tipo de cambio guardado: ingrésalo' : '');
     };
     const eq = h('span', { class: 'muted' }, eqText());
-    box.replaceChildren(h('label', { class: 'field inline' }, h('span', null, `1 ${s.currency} =`), fxIn, h('span', null, base)), eq);
+    fill(box, h('label', { class: 'field inline' }, h('span', null, `1 ${s.currency} =`), fxIn, h('span', null, base)), eq);
   }
 
   function render() {
@@ -192,7 +192,7 @@ export function openTxForm(existing, defaults = {}) {
     parts.push(h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', null, 'Fecha'), dateIn), h('label', { class: 'field' }, h('span', null, 'Etiqueta'), tagIn)));
     parts.push(descIn);
     parts.push(h('datalist', { id: 'taglist' }, tags.map(t => h('option', { value: t }))));
-    root.replaceChildren(...parts);
+    fill(root, ...parts);
     updateFx();
   }
 

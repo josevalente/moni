@@ -1,7 +1,7 @@
 // Inversiones: aportes, retiros y valorizaciones (el rendimiento = valorizaciones acumuladas).
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { h, modal, toast, formModal, promptDialog, parseNum } from '../ui.js';
+import { fill, h, modal, toast, formModal, promptDialog, parseNum } from '../ui.js';
 
 const HORIZONS = [{ v: 'short', l: 'Corto / mediano plazo' }, { v: 'long', l: 'Largo plazo (AFP, APV…)' }];
 const KIND_LABEL = { contrib: 'Aporte', withdraw: 'Retiro', gain: 'Valorización' };
@@ -79,7 +79,7 @@ function openDetail(id) {
     const s = M.investmentSummaries().find(x => x.id === id);
     if (!s) { if (m) m.close(); return; }
     const entries = db.all('invEntries').filter(e => e.invId === id).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 80);
-    body.replaceChildren(
+    fill(body, 
       h('div', { class: 'kpis' },
         h('div', null, h('span', null, 'Valor actual'), M.fmt(s.balance, s.currency)),
         h('div', null, h('span', null, 'Aportado neto'), M.fmt(s.invested, s.currency)),
@@ -125,7 +125,7 @@ export function renderInvest(root) {
         f.currency !== base && conv(f) != null ? h('div', { class: 'sub' }, `≈ ${M.fmt(conv(f), base)}`) : null))));
   };
   const archived = db.all('investments').filter(i => i.archived);
-  root.replaceChildren(
+  fill(root, 
     h('section', { class: 'card hero' },
       h('div', { class: 'label' }, 'Total invertido (valor actual)'), h('div', { class: 'big' }, M.fmt(total, base)),
       h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => editFund(null) }, '＋ Nuevo fondo'))),

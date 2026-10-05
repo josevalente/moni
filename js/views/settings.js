@@ -2,7 +2,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import * as FX from '../fx.js';
-import { h, toast, formModal, confirmDialog, promptDialog, parseNum, shareFile } from '../ui.js';
+import { fill, h, toast, formModal, confirmDialog, promptDialog, parseNum, shareFile } from '../ui.js';
 import { openSplitEditor } from './close.js';
 import { renderInvest } from './invest.js';
 import { renderDebts } from './debts.js';
@@ -78,13 +78,13 @@ function renderCategories(root) {
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(c);
     }
-    list.replaceChildren(...[...groups.entries()].map(([g, cs]) => h('section', { class: 'card' }, h('h3', null, g), cs.map(c => h('button', { class: 'row' + (c.archived ? ' dim' : ''), onclick: () => editCategory(c) },
+    fill(list, ...[...groups.entries()].map(([g, cs]) => h('section', { class: 'card' }, h('h3', null, g), cs.map(c => h('button', { class: 'row' + (c.archived ? ' dim' : ''), onclick: () => editCategory(c) },
       h('div', { class: 'main' }, h('div', { class: 'title' }, `${c.icon || ''} ${c.name}`.trim()),
         h('div', { class: 'sub' }, [KIND_L[c.kind], c.defaultAlloc === 'shared' ? (c.splitMode === 'fixed' ? 'compartido (fijo)' : c.splitMode === 'equal' ? 'compartido (50/50)' : 'compartido') : c.defaultAlloc && c.defaultAlloc.startsWith('p:') ? `solo de ${M.personName(c.defaultAlloc.slice(2))}` : null, c.archived ? 'archivada' : null].filter(Boolean).join(' · '))),
       h('div', { class: 'amt muted' }, `${counts.get(c.id) || 0}`))))));
   };
   q.addEventListener('input', draw);
-  root.replaceChildren(back(), h('div', { class: 'card-head' }, h('h2', null, 'Categorías'), h('button', { class: 'btn primary small', onclick: () => editCategory(null) }, '＋ Nueva')), q, list);
+  fill(root, back(), h('div', { class: 'card-head' }, h('h2', null, 'Categorías'), h('button', { class: 'btn primary small', onclick: () => editCategory(null) }, '＋ Nueva')), q, list);
   draw();
   return draw;
 }
@@ -121,7 +121,7 @@ function editAccount(a) {
 function renderAccounts(root) {
   const bal = M.accountBalances();
   const all = db.all('accounts').sort((a, b) => (a.archived ? 1 : 0) - (b.archived ? 1 : 0) || (a.order ?? 0) - (b.order ?? 0));
-  root.replaceChildren(back(), h('div', { class: 'card-head' }, h('h2', null, 'Cuentas'), h('button', { class: 'btn primary small', onclick: () => editAccount(null) }, '＋ Nueva')),
+  fill(root, back(), h('div', { class: 'card-head' }, h('h2', null, 'Cuentas'), h('button', { class: 'btn primary small', onclick: () => editAccount(null) }, '＋ Nueva')),
     h('section', { class: 'card' }, all.map(a => h('button', { class: 'row' + (a.archived ? ' dim' : ''), onclick: () => editAccount(a) },
       h('div', { class: 'main' }, h('div', { class: 'title' }, a.name), h('div', { class: 'sub' }, `${ACC_TYPES.find(t => t.v === a.type).l} · ${a.currency}${a.archived ? ' · archivada' : ''}`)),
       h('div', { class: 'amt' }, M.fmt(bal.get(a.id) || 0, a.currency))))));
@@ -131,7 +131,7 @@ function renderAccounts(root) {
 function renderPeople(root) {
   const ppl = M.people();
   const me = M.meId();
-  root.replaceChildren(back(), h('div', { class: 'card-head' }, h('h2', null, 'Personas'),
+  fill(root, back(), h('div', { class: 'card-head' }, h('h2', null, 'Personas'),
     h('button', { class: 'btn primary small', onclick: async () => {
       const n = await promptDialog('Nueva persona', { label: 'Nombre' });
       if (n && n.trim()) await db.put('people', { name: n.trim(), order: ppl.length });
@@ -153,7 +153,7 @@ function renderSplits(root) {
   const ppl = M.people();
   const list = db.all('splits').sort((a, b) => b.ym.localeCompare(a.ym));
   const st = M.settings();
-  root.replaceChildren(back(), h('div', { class: 'card-head' }, h('h2', null, 'Reparto mensual'), h('button', { class: 'btn primary small', onclick: () => openSplitEditor(M.curYm()) }, '＋ Cambio')),
+  fill(root, back(), h('div', { class: 'card-head' }, h('h2', null, 'Reparto mensual'), h('button', { class: 'btn primary small', onclick: () => openSplitEditor(M.curYm()) }, '＋ Cambio')),
     h('section', { class: 'card' },
       h('p', { class: 'muted' }, 'Define cómo se reparte lo compartido. Cada cambio rige desde el mes indicado hacia adelante (los meses cerrados no se alteran). Puede ser por sueldos (se calcula el %) o un porcentaje directo; y cada categoría puede tener su propia regla.'),
       list.length ? list.map(s => {
@@ -178,7 +178,7 @@ function renderCurrencies(root) {
     const rs = db.all('rates').filter(r => r.cur === cur).sort((a, b) => b.date.localeCompare(a.date));
     return rs[0];
   };
-  root.replaceChildren(back(), h('div', { class: 'card-head' }, h('h2', null, 'Monedas y tipo de cambio'),
+  fill(root, back(), h('div', { class: 'card-head' }, h('h2', null, 'Monedas y tipo de cambio'),
     h('button', { class: 'btn primary small', onclick: async (e) => {
       e.target.disabled = true; e.target.textContent = 'Actualizando…';
       const r = await FX.refreshRates({ force: true });
@@ -236,7 +236,7 @@ function renderBackup(root) {
     } catch (e) { toast(e.message || 'No se pudo importar'); }
   });
   const counts = { 'Movimientos': db.count('tx'), 'Categorías': db.count('categories'), 'Cuentas': db.count('accounts'), 'Inversiones': db.count('investments') };
-  root.replaceChildren(back(), h('h2', null, 'Respaldo y datos'),
+  fill(root, back(), h('h2', null, 'Respaldo y datos'),
     h('section', { class: 'card' },
       h('p', null, 'Tus datos viven solo en este dispositivo. ', h('strong', null, 'Haz un respaldo seguido'), ' y guárdalo en Archivos / iCloud Drive.'),
       h('p', { class: 'muted' }, last ? `Último respaldo: ${new Date(last).toLocaleString('es-CL')}` : 'Aún no has hecho un respaldo.'),
@@ -254,11 +254,11 @@ function renderBackup(root) {
 // ---------------------------------------------------------------- menú
 export function renderMore(root, sub) {
   const subs = { categorias: renderCategories, cuentas: renderAccounts, personas: renderPeople, reparto: renderSplits, monedas: renderCurrencies, respaldo: renderBackup };
-  if (sub === 'inversiones') { root.replaceChildren(); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
-  if (sub === 'deudas') { root.replaceChildren(); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
+  if (sub === 'inversiones') { fill(root, ); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
+  if (sub === 'deudas') { fill(root, ); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
   if (subs[sub]) { const r = subs[sub](root); return typeof r === 'function' ? r : () => subs[sub](root); }
   const item = (to, icon, title, sub2) => h('a', { class: 'row link', href: '#/mas/' + to }, h('div', { class: 'icon' }, icon), h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub2)), h('div', { class: 'chev' }, '›'));
-  root.replaceChildren(
+  fill(root, 
     h('section', { class: 'card' },
       item('inversiones', '📈', 'Inversiones', 'Fondos, AFP, APV: aportes y valor actual'),
       item('deudas', '🤝', 'Deudas', 'Lo que debes o te deben, en cualquier moneda')),

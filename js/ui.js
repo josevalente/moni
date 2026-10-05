@@ -21,12 +21,18 @@ export function h(tag, attrs, ...kids) {
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
+// Reemplaza los hijos de un nodo aceptando listas anidadas y descartando null/false
+// (replaceChildren nativo dibuja "null" y "[object HTMLElement]" como texto).
+export function fill(el, ...kids) {
+  el.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false));
+}
+
 // ---- Aviso breve ---------------------------------------------------------
 let toastTimer;
 export function toast(msg, { label, onAction, ms = 4000 } = {}) {
   let t = $('#toast');
   if (!t) { t = h('div', { id: 'toast', role: 'status' }); document.body.append(t); }
-  t.replaceChildren(h('span', null, msg), label ? h('button', { class: 'link', onclick: () => { onAction && onAction(); t.classList.remove('show'); } }, label) : null);
+  fill(t, h('span', null, msg), label ? h('button', { class: 'link', onclick: () => { onAction && onAction(); t.classList.remove('show'); } }, label) : null);
   t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), ms);

@@ -1,7 +1,7 @@
 // Deudas y préstamos con saldo en cualquier moneda (incluida UF).
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { h, modal, toast, formModal } from '../ui.js';
+import { fill, h, modal, toast, formModal } from '../ui.js';
 
 const DIR = [{ v: 'owe', l: 'Yo debo' }, { v: 'owed', l: 'Me deben' }];
 
@@ -55,7 +55,7 @@ function openDetail(id) {
     if (!d) { if (m) m.close(); return; }
     const entries = db.all('debtEntries').filter(e => e.debtId === id).sort((a, b) => b.date.localeCompare(a.date));
     const r = M.rateFor(d.currency, M.todayStr());
-    body.replaceChildren(
+    fill(body, 
       h('div', { class: 'kpis' },
         h('div', null, h('span', null, 'Saldo pendiente'), M.fmt(d.balance, d.currency)),
         r && d.currency !== M.base() ? h('div', null, h('span', null, `En ${M.base()} (hoy)`), M.fmt(d.balance * r, M.base())) : null),
@@ -90,7 +90,7 @@ export function renderDebts(root) {
   const eq = (d) => d.balance * (M.rateFor(d.currency, M.todayStr()) ?? 1);
   const owe = debts.filter(d => d.direction === 'owe').reduce((a, d) => a + eq(d), 0);
   const owed = debts.filter(d => d.direction === 'owed').reduce((a, d) => a + eq(d), 0);
-  root.replaceChildren(
+  fill(root, 
     h('section', { class: 'card hero' },
       h('div', { class: 'kpis' }, h('div', null, h('span', null, 'Debo'), M.fmt(owe, base)), h('div', null, h('span', null, 'Me deben'), M.fmt(owed, base))),
       h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => editDebt(null) }, '＋ Nueva deuda'))),

@@ -1,6 +1,6 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { h } from '../ui.js';
+import { fill, h } from '../ui.js';
 import { openTxForm } from './add.js';
 
 export function txRow(tx, { showDate = false } = {}) {
@@ -65,8 +65,8 @@ export function renderTxs(root) {
 
   function draw() {
     const q = state.q.trim();
-    chips.replaceChildren(...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), onclick: () => { state.filter = k; draw(); } }, l)));
-    head.replaceChildren(q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [
+    fill(chips, ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), onclick: () => { state.filter = k; draw(); } }, l)));
+    fill(head, q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [
       h('button', { class: 'icon-btn', onclick: () => { state.ym = M.addMonths(state.ym, -1); draw(); }, 'aria-label': 'Mes anterior' }, '‹'),
       h('strong', null, M.monthName(state.ym)),
       h('button', { class: 'icon-btn', onclick: () => { state.ym = M.addMonths(state.ym, 1); draw(); }, 'aria-label': 'Mes siguiente' }, '›'),
@@ -89,11 +89,11 @@ export function renderTxs(root) {
     }
     if (!txs.length) out.push(h('p', { class: 'empty' }, q ? 'Nada coincide con la búsqueda.' : 'Sin movimientos este mes.'));
     if (q && total > 300) out.push(h('p', { class: 'muted center' }, `Mostrando 300 de ${total}. Afina la búsqueda.`));
-    list.replaceChildren(...out);
+    fill(list, ...out);
     summary.textContent = txs.length ? `${total} mov. · gastos ${M.fmt(sumOut, M.base())} · ingresos ${M.fmt(sumIn, M.base())}` : '';
   }
   const summary = h('div', { class: 'muted center small' });
-  root.replaceChildren(h('div', { class: 'toolbar' }, search, chips), head, summary, list);
+  fill(root, h('div', { class: 'toolbar' }, search, chips), head, summary, list);
   draw();
   return draw;
 }

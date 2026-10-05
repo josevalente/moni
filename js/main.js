@@ -1,7 +1,7 @@
 import * as db from './db.js';
 import * as M from './model.js';
 import * as FX from './fx.js';
-import { h, toast } from './ui.js';
+import { fill, h, toast } from './ui.js';
 import { renderHome } from './views/home.js';
 import { renderTxs } from './views/txs.js';
 import { renderClose } from './views/close.js';
@@ -60,11 +60,11 @@ function draw() {
   document.querySelectorAll('.tabbar a[data-tab]').forEach(a => a.classList.toggle('on', a.dataset.tab === t.id));
   document.getElementById('title').textContent = t.title;
   document.getElementById('fab').hidden = !db.count('people');
-  if (!db.count('people')) { app.replaceChildren(welcome()); refresh = null; return; }
+  if (!db.count('people')) { fill(app, welcome()); refresh = null; return; }
   const key = location.hash;
   const body = h('div', { class: 'page' });
   const banner = backupBanner();
-  app.replaceChildren(...(banner ? [banner] : []), body);
+  fill(app, banner, body);
   const r = t.render(body, sub);
   refresh = typeof r === 'function' ? r : () => t.render(body, sub);
   if (current !== key) window.scrollTo(0, 0);
@@ -96,4 +96,4 @@ async function start() {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 }
-start().catch((e) => { app.replaceChildren(h('pre', { class: 'pre' }, 'Error al iniciar: ' + (e && e.message))); console.error(e); });
+start().catch((e) => { fill(app, h('pre', { class: 'pre' }, 'Error al iniciar: ' + (e && e.message))); console.error(e); });

@@ -1,7 +1,7 @@
 // Cierre mensual: cuánto corresponde a cada uno y cuánto se cobra/paga.
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { h, modal, toast, parseNum } from '../ui.js';
+import { fill, h, modal, toast, parseNum } from '../ui.js';
 import { openTxForm } from './add.js';
 import { txRow } from './txs.js';
 
@@ -21,7 +21,7 @@ export function openSplitEditor(ym) {
   const grid = h('div', { class: 'grid-people' });
   const drawGrid = () => {
     const isIncome = modeSel.value === 'income';
-    grid.replaceChildren(...people.map(p => {
+    fill(grid, ...people.map(p => {
       const initial = isIncome ? (prev.incomes ? prev.incomes[p.id] : '') : (prev.pct ? Math.round(prev.pct[p.id] * 1000) / 10 : Math.round((eff.pct[p.id] || 0) * 1000) / 10);
       const inp = h('input', { type: 'text', inputmode: 'decimal', value: initial ?? '', placeholder: isIncome ? 'Sueldo mensual' : '%' });
       inputs[p.id] = inp;
@@ -84,7 +84,7 @@ export function renderClose(root) {
     h('button', { class: 'icon-btn', 'aria-label': 'Mes siguiente', onclick: () => { st.ym = M.addMonths(ym, 1); renderClose(root); } }, '›'));
 
   if (ppl.length < 2) {
-    root.replaceChildren(h('p', { class: 'empty' }, 'Agrega una segunda persona en Más › Personas para repartir gastos compartidos.'));
+    fill(root, h('p', { class: 'empty' }, 'Agrega una segunda persona en Más › Personas para repartir gastos compartidos.'));
     return;
   }
 
@@ -100,7 +100,7 @@ export function renderClose(root) {
     ? h('div', null, tr.map(t => h('div', { class: 'big' }, `${M.personName(t.from)} → ${M.personName(t.to)}  ${M.fmt(t.amount, base)}`)))
     : h('div', { class: 'big ok' }, 'Al día ✓');
 
-  root.replaceChildren(
+  fill(root, 
     nav,
     h('section', { class: 'card hero' },
       h('div', { class: 'label' }, 'A pagar este cierre'),
