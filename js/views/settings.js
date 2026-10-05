@@ -18,7 +18,7 @@ const MODES = [{ v: 'prop', l: 'Proporcional a los sueldos' }, { v: 'equal', l: 
 const back = (to = '#/mas') => h('a', { class: 'backlink', href: to }, '‹ Más');
 
 // ---------------------------------------------------------------- categorías
-function editCategory(c) {
+export function editCategory(c) {
   const isNew = !(c && c.id);
   const people = M.people();
   const groups = [...new Set(M.categories().map(x => x.group).filter(Boolean))];

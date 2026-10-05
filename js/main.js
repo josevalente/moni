@@ -6,12 +6,14 @@ import { renderHome } from './views/home.js';
 import { renderTxs } from './views/txs.js';
 import { renderClose } from './views/close.js';
 import { renderMore } from './views/settings.js';
+import { renderReports } from './views/reports.js';
 import { openTxForm } from './views/add.js';
 
 const app = document.getElementById('app');
 const TABS = [
   { id: '', title: 'Inicio', icon: '🏠', render: renderHome },
   { id: 'movs', title: 'Movimientos', icon: '🧾', render: renderTxs },
+  { id: 'reportes', title: 'Reportes', icon: '📊', render: renderReports },
   { id: 'cierre', title: 'Cierre', icon: '⚖️', render: renderClose },
   { id: 'mas', title: 'Más', icon: '☰', render: renderMore },
 ];

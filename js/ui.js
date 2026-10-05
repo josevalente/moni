@@ -223,7 +223,7 @@ export async function shareFile(filename, text, type = 'application/json') {
 // ---- Gráfico de barras simple (CSS) ---------------------------------------------
 export function bars(rows, { fmt, max } = {}) {
   const mx = max ?? Math.max(1, ...rows.map(r => Math.abs(r.v)));
-  return h('div', { class: 'bars' }, rows.map(r => h('div', { class: 'bar-row', onclick: r.onclick },
+  return h('div', { class: 'bars' }, rows.map(r => h(r.onclick ? 'button' : 'div', { class: 'bar-row' + (r.onclick ? ' tappable' : ''), type: r.onclick ? 'button' : null, onclick: r.onclick },
     h('div', { class: 'bar-label' }, r.label),
     h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill', style: { width: Math.max(2, Math.abs(r.v) / mx * 100) + '%' } })),
     h('div', { class: 'bar-val' }, fmt ? fmt(r.v) : r.v))));

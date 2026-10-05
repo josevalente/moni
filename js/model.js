@@ -378,6 +378,105 @@ export function incomeOfMonth(ym, pid = null) {
   return t;
 }
 
+// ---- Series para gráficos ------------------------------------------------
+
+export function monthEnd(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+}
+
+// Meses con movimientos (para elegir períodos): el más antiguo y los años presentes.
+export function txYears() {
+  const ys = new Set();
+  for (const t of db.all('tx')) ys.add(t.date.slice(0, 4));
+  return [...ys].sort().reverse();
+}
+
+// Matriz categoría (o grupo) × mes en moneda base, para los reportes.
+// kind 'expense' | 'income' · mode 'total' (hogar) | 'mine' (mi parte) · by 'category' | 'group'
+export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 'category', pid = null } = {}) {
+  const idx = new Map(months.map((m, i) => [m, i]));
+  const ps = people();
+  const me = pid || meId();
+  const pctCache = new Map();
+  const pctOf = (ym) => { if (!pctCache.has(ym)) pctCache.set(ym, splitFor(ym).pct); return pctCache.get(ym); };
+  const rows = new Map();
+  const totals = months.map(() => 0);
+  const counts = months.map(() => 0);
+  for (const tx of db.all('tx')) {
+    if (tx.kind !== 'out' && tx.kind !== 'in') continue;
+    const i = idx.get(tx.date.slice(0, 7));
+    if (i === undefined) continue;
+    const cat = category(tx.categoryId);
+    if (!cat || cat.kind !== kind) continue;
+    if (kind === 'income' && tx.kind !== 'in') continue;
+    // en gastos, una devolución (ingreso en una categoría de gasto) resta
+    let v = txBase(tx) * (kind === 'expense' && tx.kind === 'in' ? -1 : 1);
+    if (mode === 'mine') {
+      if (kind === 'income') { if (tx.paidBy !== me) continue; } else {
+        const sh = shares(tx, cat, pctOf(months[i]), ps);
+        if (sh) v *= (sh[me] || 0); else if (tx.paidBy !== me) continue;
+      }
+    }
+    const key = by === 'group' ? (cat.group || 'Otras') : cat.id;
+    if (!rows.has(key)) {
+      rows.set(key, {
+        key, label: by === 'group' ? key : cat.name, icon: by === 'group' ? '' : (cat.icon || ''),
+        catId: by === 'group' ? null : cat.id, group: by === 'group' ? key : null,
+        values: months.map(() => 0), counts: months.map(() => 0), total: 0,
+      });
+    }
+    const r = rows.get(key);
+    r.values[i] += v; r.counts[i]++; r.total += v;
+    totals[i] += v; counts[i]++;
+  }
+  const list = [...rows.values()].filter(r => Math.abs(r.total) >= 0.5).sort((a, b) => b.total - a.total);
+  return { months, rows: list, totals, counts };
+}
+
+// Valor y aportado neto al cierre de cada mes, en la moneda del fondo.
+export function fundHistory(invId, months) {
+  const entries = db.all('invEntries').filter(e => e.invId === invId).sort((a, b) => a.date.localeCompare(b.date));
+  let j = 0, value = 0, invested = 0;
+  const cur = curYm();
+  return months.map((ym) => {
+    const end = ym === cur ? todayStr() : monthEnd(ym);
+    while (j < entries.length && entries[j].date <= end) {
+      const e = entries[j++];
+      const s = e.kind === 'withdraw' ? -1 : 1;
+      value += s * e.amount;
+      if (e.kind !== 'gain') invested += s * e.amount;
+    }
+    return { ym, value, invested };
+  });
+}
+
+// Total de inversiones en moneda base al cierre de cada mes (incluye fondos ya archivados, que
+// sí existían en el pasado; excluye monedas sin conversión como millas). El aportado se convierte
+// al mismo tipo de cambio que el valor, así la ganancia es la del fondo y no un efecto cambiario.
+export function portfolioHistory(months) {
+  const out = months.map(ym => ({ ym, value: 0, invested: 0 }));
+  const cur = curYm();
+  for (const f of db.all('investments')) {
+    if (currencyInfo(f.currency).convertible === false) continue;
+    const h = fundHistory(f.id, months);
+    h.forEach((p, k) => {
+      if (!p.value && !p.invested) return;
+      const r = rateFor(f.currency, p.ym === cur ? todayStr() : monthEnd(p.ym)) ?? 1;
+      out[k].value += p.value * r;
+      out[k].invested += p.invested * r;
+    });
+  }
+  return out;
+}
+
+// Primer mes con registros de inversión (o de un fondo).
+export function firstInvestmentMonth(invId = null) {
+  let first = null;
+  for (const e of db.all('invEntries')) if ((!invId || e.invId === invId) && (!first || e.date < first)) first = e.date;
+  return first ? first.slice(0, 7) : null;
+}
+
 // ---- Datos iniciales para una instalación nueva --------------------------
 
 export async function seedDefaults() {

@@ -2,6 +2,7 @@ import * as db from '../db.js';
 import * as M from '../model.js';
 import { fill, h, bars } from '../ui.js';
 import { txRow } from './txs.js';
+import { openCategoryDetail } from './reports.js';
 
 const st = { mode: 'total', ym: null };
 
@@ -59,8 +60,12 @@ export function renderHome(root) {
         h('div', null, h('span', null, 'Gastos'), M.fmt(spend.total, base)),
         h('div', null, h('span', null, 'Ingresos'), M.fmt(income, base)),
         h('div', null, h('span', null, 'Balance'), M.fmt(income - spend.total, base))),
-      spend.rows.length ? bars(spend.rows.slice(0, 10).map(r => ({ label: ((r.cat.icon || '') + ' ' + r.cat.name).trim(), v: r.v })), { fmt: (v) => M.fmt(v, base) })
-        : h('p', { class: 'empty' }, 'Aún no hay gastos este mes.')),
+      spend.rows.length ? bars(spend.rows.slice(0, 10).map(r => ({
+        label: ((r.cat.icon || '') + ' ' + r.cat.name).trim(), v: r.v,
+        onclick: () => openCategoryDetail({ catId: r.cat.id, kind: 'expense', mode: st.mode, period: '12' }),
+      })), { fmt: (v) => M.fmt(v, base) })
+        : h('p', { class: 'empty' }, 'Aún no hay gastos este mes.'),
+      h('div', { class: 'actions' }, h('a', { class: 'btn small', href: '#/reportes' }, 'Ver mes a mes'))),
     h('section', { class: 'card' },
       h('h3', null, 'Cuentas'),
       accRows.length ? accRows.map(({ a, v }) => h('div', { class: 'row static' },
