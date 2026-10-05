@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Moni</title>
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Moni">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">Moni</h1>
+    <span class="offline-pill">Sin conexión</span>
+  </header>
+  <main id="app"></main>
+  <button id="fab" class="fab" aria-label="Nuevo movimiento" hidden>＋</button>
+  <nav class="tabbar" aria-label="Principal">
+    <a href="#/" data-tab=""><i>🏠</i>Inicio</a>
+    <a href="#/movs" data-tab="movs"><i>🧾</i>Movimientos</a>
+    <a href="#/cierre" data-tab="cierre"><i>⚖️</i>Cierre</a>
+    <a href="#/mas" data-tab="mas"><i>☰</i>Más</a>
+  </nav>
+  <noscript>Moni necesita JavaScript.</noscript>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
