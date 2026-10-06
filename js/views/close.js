@@ -6,6 +6,13 @@ import { openTxForm } from './add.js';
 import { txRow } from './txs.js';
 
 const st = { ym: null };
+
+// Abre el Cierre en un mes dado (desde los pendientes de Inicio).
+export function showCloseMonth(ym) {
+  st.ym = ym;
+  if (location.hash === '#/cierre') window.dispatchEvent(new HashChangeEvent('hashchange'));
+  else location.hash = '#/cierre';
+}
 const pctText = (p) => `${Math.round(p * 1000) / 10}%`;
 
 export function openSplitEditor(ym) {

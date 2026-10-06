@@ -4,6 +4,7 @@ import * as M from '../model.js';
 import * as FX from '../fx.js';
 import { fill, h, modal, toast, formModal, confirmDialog, promptDialog, parseNum, shareFile } from '../ui.js';
 import { openSplitEditor } from './close.js';
+import { categoryPicker } from './add.js';
 import { renderInvest } from './invest.js';
 import { renderDebts } from './debts.js';
 
@@ -23,7 +24,7 @@ export function editCategory(c) {
   const people = M.people();
   const groups = [...new Set(M.categories().map(x => x.group).filter(Boolean))];
   const val = { kind: 'expense', defaultAlloc: 'none', splitMode: 'prop', ...(c || {}) };
-  formModal({
+  const fm = formModal({
     title: isNew ? 'Nueva categoría' : 'Editar categoría', value: val,
     fields: [
       { key: 'name', label: 'Nombre', type: 'text', required: true },
@@ -65,8 +66,67 @@ export function editCategory(c) {
       if (used) { toast('Tiene movimientos: archívala en vez de eliminarla'); return; }
       await db.del('categories', v.id);
     } : null,
-    extra: h('datalist', { id: 'grouplist' }, groups.map(g => h('option', { value: g }))),
+    extra: [
+      h('datalist', { id: 'grouplist' }, groups.map(g => h('option', { value: g }))),
+      // combinar: mueve los movimientos a otra categoría (cada uno conserva su reparto y quién pagó)
+      !isNew && !c.mergedInto ? h('div', { class: 'merge-box' },
+        h('button', { type: 'button', class: 'btn small', onclick: () => {
+          fm.close();
+          categoryPicker(null, null, (toId) => confirmMerge(c.id, toId), { kinds: [c.kind], exclude: c.id, title: `Combinar "${c.name}" con…` });
+        } }, 'Combinar con otra categoría…'),
+        h('small', { class: 'muted' }, 'Útil para categorías repetidas, como "Comida" y "Comida (compartida)": el reparto ya se elige en cada movimiento.')) : null,
+    ],
   });
+}
+
+// Combina con confirmación y permite deshacer.
+export async function confirmMerge(fromId, toId, { rename } = {}) {
+  const from = M.category(fromId) && db.get('categories', fromId), to = db.get('categories', toId);
+  if (!from || !to) return;
+  const n = db.all('tx').filter(t => t.categoryId === fromId).length;
+  const ok = await confirmDialog(`Se moverán ${n} movimientos de "${from.name}" a "${to.name}"${rename && rename !== to.name ? ` (que pasará a llamarse "${rename}")` : ''}. Cada movimiento conserva su reparto y quién pagó. "${from.name}" quedará archivada.`, { ok: 'Combinar', danger: false });
+  if (!ok) return;
+  const undo = await M.mergeCategory(fromId, toId, { rename });
+  toast(`Combinadas: ${n} movimientos ahora en "${rename || to.name}"`, { label: 'Deshacer', onAction: () => M.undoMerge(undo), ms: 8000 });
+}
+
+// Revisar categorías sin uso en 12 meses y archivar las elegidas (siguen en el historial y los reportes).
+function reviewUnused(unused, uses) {
+  const checks = new Map();
+  const list = h('div', null, unused.map(c => {
+    const box = h('input', { type: 'checkbox', checked: true });
+    checks.set(c.id, box);
+    return h('label', { class: 'field check' }, box, h('span', null, `${c.icon ? c.icon + ' ' : ''}${c.name}`), h('small', null, `${uses.get(c.id) || 0} movimientos en total`));
+  }));
+  const m = modal('Categorías sin uso en 12 meses', h('div', null,
+    h('p', { class: 'muted' }, 'Archivadas dejan de aparecer al registrar, pero sus movimientos siguen en el historial y los reportes. Puedes restaurarlas cuando quieras.'),
+    list), {
+    actions: [
+      h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const ids = unused.filter(c => checks.get(c.id).checked).map(c => c.id);
+        if (!ids.length) { m.close(); return; }
+        await db.putMany('categories', ids.map(id => ({ ...db.get('categories', id), archived: true })));
+        m.close();
+        toast(`${ids.length} categorías archivadas`, { label: 'Deshacer', onAction: () => db.putMany('categories', ids.map(id => ({ ...db.get('categories', id), archived: false }))), ms: 8000 });
+      } }, 'Archivar seleccionadas'),
+    ],
+  });
+}
+
+function cleanupCard() {
+  const { twins, unused, uses } = M.categoryCleanup();
+  if (!twins.length && !unused.length) return null;
+  return h('section', { class: 'card tidy' },
+    h('h3', null, 'Sugerencias para ordenar'),
+    twins.map(t => h('div', { class: 'row static' },
+      h('div', { class: 'main' },
+        h('div', { class: 'title' }, `${t.from.name} → ${t.finalName}`),
+        h('div', { class: 'sub' }, `${t.count} movimientos se suman a "${t.to.name}"${t.finalName !== t.to.name ? ', que pasa a llamarse ' + t.finalName : ''}`)),
+      h('button', { class: 'btn small', onclick: () => confirmMerge(t.from.id, t.to.id, { rename: t.finalName !== t.to.name ? t.finalName : undefined }) }, 'Combinar'))),
+    unused.length ? h('div', { class: 'row static' },
+      h('div', { class: 'main' }, h('div', { class: 'title' }, `${unused.length} categorías sin uso en 12 meses`), h('div', { class: 'sub' }, 'Archivarlas acorta la lista al registrar')),
+      h('button', { class: 'btn small', onclick: () => reviewUnused(unused, uses) }, 'Revisar')) : null);
 }
 
 function renderCategories(root) {
@@ -83,9 +143,9 @@ function renderCategories(root) {
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(c);
     }
-    fill(list, ...[...groups.entries()].map(([g, cs]) => h('section', { class: 'card' }, h('h3', null, g), cs.map(c => h('button', { class: 'row' + (c.archived ? ' dim' : ''), onclick: () => editCategory(c) },
+    fill(list, cleanupCard(), ...[...groups.entries()].map(([g, cs]) => h('section', { class: 'card' }, h('h3', null, g), cs.map(c => h('button', { class: 'row' + (c.archived ? ' dim' : ''), onclick: () => editCategory(c) },
       h('div', { class: 'main' }, h('div', { class: 'title' }, `${c.icon || ''} ${c.name}`.trim()),
-        h('div', { class: 'sub' }, [KIND_L[c.kind], c.defaultAlloc === 'shared' ? (c.splitMode === 'fixed' ? 'compartido (fijo)' : c.splitMode === 'equal' ? 'compartido (50/50)' : 'compartido') : c.defaultAlloc && c.defaultAlloc.startsWith('p:') ? `solo de ${M.personName(c.defaultAlloc.slice(2))}` : null, c.archived ? 'archivada' : null].filter(Boolean).join(' · '))),
+        h('div', { class: 'sub' }, [KIND_L[c.kind], c.defaultAlloc === 'shared' ? (c.splitMode === 'fixed' ? 'compartido (fijo)' : c.splitMode === 'equal' ? 'compartido (50/50)' : 'compartido') : c.defaultAlloc && c.defaultAlloc.startsWith('p:') ? `solo de ${M.personName(c.defaultAlloc.slice(2))}` : null, c.archived ? (c.mergedInto ? `combinada en ${(M.category(c.id) || {}).name || '?'}` : 'archivada') : null].filter(Boolean).join(' · '))),
       h('div', { class: 'amt muted' }, `${counts.get(c.id) || 0}`))))));
   };
   q.addEventListener('input', draw);
@@ -235,17 +295,20 @@ export function exportCsv() {
   return rows.map(r => r.map(q).join(';')).join('\n');
 }
 
+// Exporta el respaldo (hoja de compartir en el iPhone). Solo cuenta como respaldo si no se canceló.
+export async function exportBackup() {
+  const json = JSON.stringify(db.exportAll());
+  if (await shareFile(`moni-respaldo-${new Date().toISOString().slice(0, 10)}.json`, json)) {
+    try { localStorage.setItem('moni.lastBackup', new Date().toISOString()); } catch { /* ignore */ }
+    return true;
+  }
+  return false;
+}
+
 function renderBackup(root) {
   const last = (() => { try { return localStorage.getItem('moni.lastBackup'); } catch { return null; } })();
   const stamp = () => new Date().toISOString().slice(0, 10);
-  const doExport = async () => {
-    const json = JSON.stringify(db.exportAll());
-    // solo cuenta como respaldo si no se canceló la hoja de compartir
-    if (await shareFile(`moni-respaldo-${stamp()}.json`, json)) {
-      try { localStorage.setItem('moni.lastBackup', new Date().toISOString()); } catch { /* ignore */ }
-    }
-    renderBackup(root);
-  };
+  const doExport = async () => { await exportBackup(); renderBackup(root); };
   // iOS puede borrar datos de sitios web si falta espacio, salvo que el almacenamiento sea persistente
   const storageLine = h('p', { class: 'muted small' }, 'Revisando almacenamiento…');
   const persistBtn = h('button', { class: 'btn small', hidden: true, onclick: async () => {

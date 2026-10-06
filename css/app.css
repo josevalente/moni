@@ -280,3 +280,48 @@ select:disabled { opacity: .65; }
 .heat-row:focus { outline: 2px solid var(--brand); outline-offset: -2px; }
 .heat tfoot th, .heat tfoot td { font-weight: 700; }
 .bar-row.tappable { width: 100%; background: none; border: 0; padding: 4px 0; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+
+/* ---- Captura: descripción primero ------------------------------------------- */
+.form-top { display: flex; align-items: center; gap: 8px; }
+.kind-pill { width: auto; min-height: 34px; padding: 4px 30px 4px 12px; font-size: 14px; font-weight: 600; border-radius: 99px; }
+.desc-wrap { position: relative; }
+.desc-input { font-size: 17px !important; }
+.suggest { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 22px rgba(0, 0, 0, .16); overflow: hidden; }
+.suggest-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; background: none; border: 0; border-top: 1px solid var(--line); text-align: left; cursor: pointer; min-height: 52px; }
+.suggest-item:first-child { border-top: 0; }
+.suggest-item.active, .suggest-item:hover { background: var(--brand-soft); }
+.s-icon { width: 24px; text-align: center; flex: none; font-size: 18px; }
+.s-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.s-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-amt { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.amount-help { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 0; margin-top: -6px; }
+.amount-help:empty { display: none; }
+.amount-eval { font-size: 14px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.amount-eval.bad { color: var(--neg); }
+.chip.small { min-height: 32px; padding: 4px 12px; font-size: 13px; }
+.cat-chips { padding-bottom: 6px; }
+/* el ancho de un select lo fija su opción más larga: se acota para que "Otra…" sea un botón más */
+.chip-select { width: 108px; flex: none; min-height: 40px; border-radius: 99px; padding: 6px 28px 6px 14px; font-size: 15px; background-color: var(--card); text-overflow: ellipsis; }
+.sum-chip { padding: 7px 10px; }
+.summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.sum-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 7px 12px; min-height: 38px; font-size: 14px; cursor: pointer; }
+.sum-chip.on { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.sum-editor { background: var(--bg); border-radius: 12px; padding: 10px; display: grid; gap: 8px; }
+.sum-editor .chips { align-items: center; }
+.sum-editor input[type=date] { width: auto; min-height: 40px; }
+
+/* ---- Inicio: pendientes ------------------------------------------------------- */
+.pend { border-color: var(--brand); }
+.pend-progress { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; margin: 2px 0 6px; }
+.pend-progress > div { height: 100%; background: var(--brand); border-radius: 3px; }
+.pend-row .icon { font-size: 20px; }
+.pend-row .row-actions { flex-wrap: nowrap; align-items: center; }
+.icon-btn.small { width: 32px; height: 32px; font-size: 15px; }
+.link-row { display: block; width: 100%; background: none; border: 0; border-top: 1px solid var(--line); padding: 10px 2px; text-align: left; color: var(--brand); font-weight: 600; cursor: pointer; }
+.link-row.small { font-size: 13px; font-weight: 500; }
+.card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.tile.tappable { text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.merge-box { display: grid; gap: 6px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tidy { border-color: var(--brand); }
+.tidy .title, .tidy .sub { white-space: normal; }

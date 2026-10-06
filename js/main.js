@@ -2,7 +2,7 @@ import * as db from './db.js';
 import * as M from './model.js';
 import * as FX from './fx.js';
 import { fill, h, toast } from './ui.js';
-import { renderHome } from './views/home.js';
+import { renderHome, pendingNow } from './views/home.js';
 import { renderTxs } from './views/txs.js';
 import { renderClose } from './views/close.js';
 import { renderMore } from './views/settings.js';
@@ -24,18 +24,6 @@ let current = null;
 function parseHash() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   return { tab: parts[0] || '', sub: parts[1] || '' };
-}
-
-function backupBanner() {
-  if (db.count('tx') < 20) return null;
-  let last = null;
-  try { last = localStorage.getItem('moni.lastBackup'); } catch { /* ignore */ }
-  const days = last ? (Date.now() - new Date(last).getTime()) / 864e5 : Infinity;
-  if (days < 30 || sessionStorage.getItem('moni.hideBackup')) return null;
-  return h('div', { class: 'banner' },
-    h('span', null, last ? `Hace ${Math.floor(days)} días del último respaldo.` : 'Aún no has hecho un respaldo.'),
-    h('a', { href: '#/mas/respaldo' }, 'Respaldar'),
-    h('button', { class: 'icon-btn', 'aria-label': 'Ocultar', onclick: () => { sessionStorage.setItem('moni.hideBackup', '1'); draw(); } }, '✕'));
 }
 
 function welcome() {
@@ -65,13 +53,27 @@ function draw() {
   if (!db.count('people')) { fill(app, welcome()); refresh = null; return; }
   const key = location.hash;
   const body = h('div', { class: 'page' });
-  const banner = backupBanner();
-  fill(app, banner, body);
+  fill(app, body);
   const r = t.render(body, sub);
   refresh = typeof r === 'function' ? r : () => t.render(body, sub);
   if (current !== key) window.scrollTo(0, 0);
   current = key;
+  updateBadge();
 }
+
+// Número de pendientes sobre el ícono de la app (iPhone con iOS 16.4+, si se permitieron notificaciones).
+function updateBadge() {
+  if (!('setAppBadge' in navigator) || !db.count('people')) return;
+  try {
+    const n = pendingNow().items.length;
+    (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+  } catch { /* ignore */ }
+}
+window.addEventListener('moni:badge', updateBadge);
+// al volver a la app: la fecha pudo cambiar (nuevo mes, cuentas que vencen)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && refresh && db.count('people')) { refresh(); updateBadge(); }
+});
 
 let rafPending = false;
 db.subscribe(() => {
@@ -81,6 +83,7 @@ db.subscribe(() => {
     rafPending = false;
     if (!db.count('people')) return draw();
     if (refresh) { const y = window.scrollY; refresh(); window.scrollTo(0, y); }
+    updateBadge();
   });
 });
 

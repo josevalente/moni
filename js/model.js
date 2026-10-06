@@ -61,7 +61,13 @@ export function setMeId(id) { try { localStorage.setItem(ME_KEY, id); } catch { 
 
 export const accounts = () => db.all('accounts').filter(a => !a.archived).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
 export const categories = () => db.all('categories').sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
-export const category = (id) => db.get('categories', id);
+// Una categoría combinada en otra queda archivada con `mergedInto`: se resuelve a su destino, así los
+// movimientos que lleguen después desde otro teléfono también suman en la categoría final.
+export const category = (id) => {
+  let c = db.get('categories', id);
+  for (let i = 0; c && c.mergedInto && i < 8; i++) { const n = db.get('categories', c.mergedInto); if (!n) break; c = n; }
+  return c;
+};
 export const account = (id) => db.get('accounts', id);
 
 // ---- Formato y parseo ----------------------------------------------------
@@ -88,6 +94,42 @@ export function parseAmount(str) {
   else if (hasD && /^-?[1-9]\d{0,2}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
   const n = Number(s);
   return Number.isFinite(n) ? n : NaN;
+}
+
+// Monto con operaciones simples, como en las celdas del Excel: "7.000+6.900", "45.990-5.000", "12.500*2".
+// Cada número usa el formato chileno de parseAmount; * y / van antes que + y -.
+export const isAmountExpression = (str) => /[+*/x×÷]|\d\s*-/i.test(String(str ?? '').replace(/^\s*-/, ''));
+export function evalAmount(str) {
+  const src = String(str ?? '').replace(/\s|\$/g, '').replace(/[x×]/gi, '*').replace(/÷/g, '/');
+  if (!src) return NaN;
+  if (!isAmountExpression(src)) return parseAmount(src);
+  const tokens = src.match(/\d[\d.,]*|[+\-*/]/g);
+  if (!tokens || tokens.join('') !== src) return NaN;
+  // números (con signo unario) y operadores alternados
+  const nums = [], ops = [];
+  let expectNum = true, neg = false;
+  for (const t of tokens) {
+    if (expectNum) {
+      if (t === '-' || t === '+') { if (t === '-') neg = !neg; continue; }
+      const n = parseAmount(t);
+      if (!Number.isFinite(n)) return NaN;
+      nums.push(neg ? -n : n); neg = false; expectNum = false;
+    } else {
+      if (!/^[+\-*/]$/.test(t)) return NaN;
+      ops.push(t); expectNum = true;
+    }
+  }
+  if (expectNum) return NaN;                       // termina en operador
+  // primero * y /
+  for (let i = 0; i < ops.length;) {
+    if (ops[i] === '*' || ops[i] === '/') {
+      const r = ops[i] === '*' ? nums[i] * nums[i + 1] : nums[i] / nums[i + 1];
+      nums.splice(i, 2, r); ops.splice(i, 1);
+    } else i++;
+  }
+  let v = nums[0];
+  ops.forEach((o, i) => { v = o === '+' ? v + nums[i + 1] : v - nums[i + 1]; });
+  return Number.isFinite(v) ? Math.round(v * 1e6) / 1e6 : NaN;
 }
 
 // ---- Tipos de cambio -----------------------------------------------------
@@ -376,6 +418,219 @@ export function incomeOfMonth(ym, pid = null) {
     if (cat && cat.kind === 'income') t += txBase(tx);
   }
   return t;
+}
+
+// ---- Asistentes: sugerencias por descripción --------------------------------
+
+// quita tildes pero conserva la ñ ("pañales" no debe coincidir con "pantalones")
+export const stripAccents = (s) => String(s || '').replace(/ñ/g, '').replace(/Ñ/g, '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(//g, 'ñ').replace(//g, 'Ñ');
+const normKey = (s) => stripAccents(String(s || '').toLowerCase()).replace(/\s+/g, ' ').trim();
+
+let descIdx = null;
+db.subscribe((ch) => { if (!ch || ch.has('tx') || ch.has('categories')) descIdx = null; });
+
+function buildDescIdx() {
+  const m = new Map();
+  for (const t of db.all('tx')) {
+    if ((t.kind !== 'out' && t.kind !== 'in') || !t.desc) continue;
+    const k = normKey(t.desc);
+    if (!k) continue;
+    // una misma descripción puede tener variantes ("Jumbo" que pagó la otra persona vs "Jumbo" que pagué yo)
+    const cat = category(t.categoryId);
+    const key = [t.kind, k, cat ? cat.id : '', t.paidBy].join('|');
+    const e = m.get(key);
+    if (!e) m.set(key, { key: k, kind: t.kind, count: 1, last: t });
+    else {
+      e.count++;
+      if (t.date > e.last.date || (t.date === e.last.date && (t.createdAt || 0) > (e.last.createdAt || 0))) e.last = t;
+    }
+  }
+  descIdx = [...m.values()];
+}
+
+// Movimientos anteriores cuya descripción empieza (o tiene una palabra que empieza) con lo escrito.
+// Cada sugerencia es una variante (descripción + categoría + quién pagó) y trae su último movimiento:
+// cuenta, reparto y monto. Primero las que pagó `payer` (la persona de este teléfono).
+export function suggestDescriptions(q, kind = 'out', limit = 4, payer = null) {
+  const nq = normKey(q);
+  if (nq.length < 2) return [];
+  if (!descIdx) buildDescIdx();
+  const today = todayStr();
+  const ago = (d) => (Date.parse(today) - Date.parse(d)) / 864e5;
+  const out = [];
+  for (const e of descIdx) {
+    if (e.kind !== kind) continue;
+    const rank = e.key.startsWith(nq) ? 0 : e.key.includes(' ' + nq) ? 1 : -1;
+    if (rank < 0) continue;
+    const cat = category(e.last.categoryId);
+    if (!cat) continue;
+    const age = ago(e.last.date);
+    out.push({ ...e, rank, cat, score: e.count * (age < 90 ? 3 : age < 365 ? 1.5 : 1) });
+  }
+  const mine = (e) => (payer && e.last.paidBy === payer ? 0 : 1);
+  out.sort((a, b) => a.rank - b.rank || mine(a) - mine(b) || b.score - a.score || b.last.date.localeCompare(a.last.date));
+  return out.slice(0, limit);
+}
+
+// Categorías cuyo nombre (o una de sus palabras) empieza con lo escrito.
+export function suggestCategories(q, kinds, limit = 2) {
+  const nq = normKey(q);
+  if (nq.length < 2) return [];
+  return categories().filter(c => !c.archived && (!kinds || kinds.includes(c.kind)))
+    .filter(c => { const n = normKey(c.name); return n.startsWith(nq) || n.includes(' ' + nq); })
+    .slice(0, limit);
+}
+
+// ---- Asistentes: ordenar categorías -----------------------------------------
+
+// Nombre "base" para encontrar gemelas heredadas del Excel: "Comida (compartida)" ≈ "Comida",
+// "Otros Gastos" ≈ "Otros (compartidos)", "Maite Solo" ≈ "Maite".
+const QUALIFIERS = new Set(['compartido', 'compartida', 'compartidos', 'compartidas', 'solo', 'sola', 'gasto', 'gastos']);
+function baseName(name) {
+  return stripAccents(String(name).replace(/\([^)]*\)/g, ' ').toLowerCase())
+    .split(/[^a-z0-9ñ]+/).filter(Boolean)
+    .filter(w => !QUALIFIERS.has(w))
+    .map(w => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w))
+    .join(' ');
+}
+const hasQualifier = (name) => /\(/.test(name) || String(name).split(/\s+/).some(w => QUALIFIERS.has(stripAccents(w.toLowerCase())));
+
+export function categoryCleanup() {
+  const cats = categories().filter(c => !c.archived);
+  const uses = new Map(), recent = new Set();
+  const cutoff = addMonths(curYm(), -12) + '-01';
+  for (const t of db.all('tx')) {
+    if (!t.categoryId) continue;
+    uses.set(t.categoryId, (uses.get(t.categoryId) || 0) + 1);
+    if (t.date >= cutoff) recent.add(t.categoryId);
+  }
+  const groups = new Map();
+  for (const c of cats) {
+    const b = baseName(c.name);
+    if (!b) continue;
+    const k = c.kind + '|' + b;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(c);
+  }
+  const twins = [];
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    // destino: el nombre sin "(...)" ni calificativos; si empatan, el más usado
+    list.sort((a, b) => (/\(/.test(a.name) - /\(/.test(b.name)) || (hasQualifier(a.name) - hasQualifier(b.name)) || ((uses.get(b.id) || 0) - (uses.get(a.id) || 0)));
+    const to = list[0];
+    const finalName = /\(/.test(to.name) ? to.name.replace(/\s*\([^)]*\)\s*/g, ' ').trim() : to.name;
+    for (const from of list.slice(1)) twins.push({ from, to, count: uses.get(from.id) || 0, finalName });
+  }
+  const monthAgo = Date.now() - 30 * 864e5;
+  const unused = cats.filter(c => !recent.has(c.id) && (uses.has(c.id) || (c.createdAt || 0) < monthAgo));
+  return { twins, unused, uses };
+}
+
+// Combina "from" en "to": mueve sus movimientos (cada uno conserva su reparto y quién pagó) y deja
+// "from" archivada como alias de "to". Devuelve lo necesario para deshacer.
+export async function mergeCategory(fromId, toId, { rename } = {}) {
+  const from = db.get('categories', fromId), to = db.get('categories', toId);
+  if (!from || !to || fromId === toId) throw new Error('Elige dos categorías distintas');
+  const moved = db.all('tx').filter(t => t.categoryId === fromId);
+  if (moved.length) await db.putMany('tx', moved.map(t => ({ ...t, categoryId: toId })));
+  await db.put('categories', { ...from, archived: true, mergedInto: toId });
+  const prevName = to.name;
+  if (rename && rename !== to.name) await db.put('categories', { ...db.get('categories', toId), name: rename });
+  // los pendientes que apuntaban a "from" pasan a "to"
+  const st = settings();
+  const swap = (arr) => (arr || []).map(id => (id === fromId ? toId : id));
+  if ((st.pendingIgnore || []).includes(fromId) || Object.values(st.pendingSkip || {}).some(a => a.includes(fromId))) {
+    await db.put('settings', { ...st, pendingIgnore: swap(st.pendingIgnore), pendingSkip: Object.fromEntries(Object.entries(st.pendingSkip || {}).map(([k, v]) => [k, swap(v)])) });
+  }
+  return { fromId, toId, movedIds: moved.map(t => t.id), prevName };
+}
+
+export async function undoMerge({ fromId, toId, movedIds, prevName }) {
+  const back = movedIds.map(id => db.get('tx', id)).filter(t => t && t.categoryId === toId).map(t => ({ ...t, categoryId: fromId }));
+  if (back.length) await db.putMany('tx', back);
+  const from = db.get('categories', fromId);
+  if (from) { const { mergedInto, ...rest } = from; await db.put('categories', { ...rest, archived: false }); }
+  const to = db.get('categories', toId);
+  if (to && to.name !== prevName) await db.put('categories', { ...to, name: prevName });
+}
+
+// ---- Asistentes: cuentas fijas y pendientes del mes ----------------------------
+
+// Gastos que se pagan ~1 vez al mes: presentes en 5 de los 6 meses cerrados anteriores, con un solo
+// pago en al menos el 70% de esos meses. "fixed" = el monto casi no varía (±5%).
+export function recurringBills(ref = curYm()) {
+  const months = monthsBetween(addMonths(ref, -6), addMonths(ref, -1));
+  const idx = new Map(months.map((m, i) => [m, i]));
+  const ignore = new Set(settings().pendingIgnore || []);
+  const per = new Map();
+  for (const t of db.all('tx')) {
+    if (t.kind !== 'out') continue;
+    const i = idx.get(t.date.slice(0, 7));
+    if (i === undefined) continue;
+    const cat = category(t.categoryId);
+    if (!cat || cat.kind !== 'expense' || cat.archived || ignore.has(cat.id)) continue;
+    let e = per.get(cat.id);
+    if (!e) per.set(cat.id, (e = { cat, totals: months.map(() => 0), counts: months.map(() => 0), days: [], last: null }));
+    e.totals[i] += txBase(t); e.counts[i]++; e.days.push(Number(t.date.slice(8)));
+    if (!e.last || t.date > e.last.date || (t.date === e.last.date && (t.createdAt || 0) > (e.last.createdAt || 0))) e.last = t;
+  }
+  const out = [];
+  for (const e of per.values()) {
+    const present = e.counts.filter(n => n > 0).length;
+    const single = e.counts.filter(n => n === 1).length;
+    if (present < 5 || single / present < 0.7) continue;
+    const vals = e.totals.filter(v => v > 0);
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const sd = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
+    const sorted = [...vals].sort((a, b) => a - b);
+    const days = [...e.days].sort((a, b) => a - b);
+    out.push({ catId: e.cat.id, cat: e.cat, median: sorted[Math.floor(sorted.length / 2)], fixed: mean > 0 && sd / mean <= 0.05, day: days[Math.floor(days.length / 2)], template: e.last });
+  }
+  return out.sort((a, b) => a.day - b.day || a.cat.name.localeCompare(b.cat.name));
+}
+
+// Lo que falta hacer este mes: cuentas fijas sin registrar, cierre del mes anterior sin saldar,
+// inversiones sin valorizar hace más de 35 días y respaldo atrasado (más de 14 días).
+export function pendingItems(ref = curYm(), { lastBackup = null, now = Date.now() } = {}) {
+  const items = [];
+  const bills = recurringBills(ref);
+  const skip = new Set((settings().pendingSkip || {})[ref] || []);
+  const paid = new Set();
+  for (const t of db.all('tx')) if (t.kind === 'out' && t.date.slice(0, 7) === ref) { const c = category(t.categoryId); if (c) paid.add(c.id); }
+  let done = 0;
+  for (const b of bills) {
+    if (paid.has(b.catId) || skip.has(b.catId)) { done++; continue; }
+    items.push({ type: 'bill', key: 'bill:' + b.catId, ...b });
+  }
+  if (people().length > 1) {
+    const prev = addMonths(ref, -1);
+    const s = settings();
+    if (!s.settleStart || s.settleStart <= prev) {
+      const tr = settleSummary(ledger(prev).balance);
+      if (tr.length) items.unshift({ type: 'close', key: 'close:' + prev, ym: prev, transfers: tr });
+    }
+  }
+  const lastGain = new Map();
+  for (const e of db.all('invEntries')) if (e.kind === 'gain' && (!lastGain.has(e.invId) || e.date > lastGain.get(e.invId))) lastGain.set(e.invId, e.date);
+  const stale = investmentSummaries().filter(f => Math.abs(f.balance) > 0 && lastGain.has(f.id))
+    .map(f => ({ id: f.id, name: f.name, days: Math.floor((now - Date.parse(lastGain.get(f.id))) / 864e5) }))
+    .filter(f => f.days > 35).sort((a, b) => b.days - a.days);
+  if (stale.length) items.push({ type: 'invest', key: 'invest', funds: stale });
+  if (db.count('tx') >= 20) {
+    const days = lastBackup ? Math.floor((now - Date.parse(lastBackup)) / 864e5) : Infinity;
+    if (days > 14) items.push({ type: 'backup', key: 'backup', days });
+  }
+  return { items, bills: bills.length, done };
+}
+
+export async function skipPending(catId, ym, { forever = false } = {}) {
+  const st = settings();
+  if (forever) return db.put('settings', { ...st, pendingIgnore: [...new Set([...(st.pendingIgnore || []), catId])] });
+  const skip = { ...(st.pendingSkip || {}) };
+  skip[ym] = [...new Set([...(skip[ym] || []), catId])];
+  // solo se guardan los últimos meses
+  for (const k of Object.keys(skip)) if (k < addMonths(ym, -3)) delete skip[k];
+  return db.put('settings', { ...st, pendingSkip: skip });
 }
 
 // ---- Series para gráficos ------------------------------------------------
