@@ -325,3 +325,39 @@ select:disabled { opacity: .65; }
 .merge-box { display: grid; gap: 6px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
 .tidy { border-color: var(--brand); }
 .tidy .title, .tidy .sub { white-space: normal; }
+
+/* ---- Cartola por cuenta y cuadre con el banco ----------------------------------- */
+.acc-top { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+.acc-top .main { flex: 1; min-width: 0; }
+.acc-top h2 { margin: 2px 0 0; overflow-wrap: anywhere; }
+.acc-top .icon-btn { margin-left: -8px; }
+.acc-card .actions { margin-top: 10px; }
+.recon { border-color: var(--neg); }
+.recon.ok { border-color: var(--pos); }
+.recon-ok { font-weight: 700; color: var(--pos); font-size: 17px; }
+.recon-grid { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: baseline; margin: 2px 0 6px; }
+.recon-grid > span:nth-child(3n+1) { color: var(--muted); font-size: 14px; }
+.recon-grid b { font-variant-numeric: tabular-nums; text-align: right; }
+.recon-grid .link { padding: 0; font-size: 14px; }
+.recon-explain { margin: 4px 0 0; }
+.recon-sum { display: grid; gap: 4px; }
+.recon-verdict { font-weight: 600; }
+.hint { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.hint:first-of-type { border-top: 0; }
+.hint-text { display: grid; gap: 2px; font-size: 14px; }
+.hint .row-actions { justify-content: flex-start; }
+.acc-tools .chips:empty { display: none; }
+.dayhead.split { display: flex; justify-content: space-between; gap: 8px; }
+.daybal { text-transform: none; font-variant-numeric: tabular-nums; font-weight: 600; }
+.row.acc-move { padding: 0; gap: 0; cursor: default; min-height: 0; }
+.row-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 52px; padding: 10px 2px; background: none; border: 0; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.row-main .amt.pos { color: var(--pos); }
+/* marca "encontrado en el banco": círculo de 30px con área táctil de 44px */
+.tick { position: relative; flex: none; width: 30px; height: 30px; margin: 0 10px 0 0; border-radius: 50%; border: 2px solid var(--muted); background: none; color: transparent; font-weight: 700; font-size: 15px; line-height: 1; cursor: pointer; padding: 0; }
+.tick::after { content: ''; position: absolute; inset: -8px; }
+.tick.on { background: var(--pos); border-color: var(--pos); color: var(--card); }
+.acc-move.ticked .title, .acc-move.ticked .amt { color: var(--muted); }
+.recon-mark { margin: 10px -12px 0; padding: 8px 12px; background: var(--brand-soft); color: var(--ink); font-size: 13px; font-weight: 600; }
+.recon-mark.from { background: var(--bg); color: var(--muted); }
+.list .recon-mark:first-child { margin-top: 0; border-radius: var(--radius) var(--radius) 0 0; }
+.drift-list { margin: 6px 0; }

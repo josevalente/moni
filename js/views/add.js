@@ -94,7 +94,7 @@ export function openTxForm(existing, defaults = {}) {
     return usable(lastAcc) || ((accounts.find(a => !a.archived) || {}).id) || null;
   }
 
-  const { focus: focusTarget, lastAmount: lastAmountDefault, ...rest } = defaults;
+  const { focus: focusTarget, lastAmount: lastAmountDefault, lockAccount = false, ...rest } = defaults;
   const s = {
     kind: 'out', date: today, amount: '', currency: null, accountId: null, toAccountId: null,
     categoryId: null, desc: '', paidBy: me, alloc: null, allocTouched: false, fx: null, fxTouched: false,
@@ -229,7 +229,8 @@ export function openTxForm(existing, defaults = {}) {
       s.desc = t.desc; descIn.value = t.desc;
       s.categoryId = x.sg.cat.id;
       if (t.paidBy && db.get('people', t.paidBy)) setPayer(t.paidBy);
-      if (s.paidBy === owner && usable(t.accountId)) setAccount(t.accountId);
+      // desde la cartola de una cuenta, la cuenta ya está elegida
+      if (s.paidBy === owner && usable(t.accountId) && !lockAccount) setAccount(t.accountId);
       s.alloc = allocToState(t.alloc); s.allocTouched = true;
       s.lastAmount = { amount: t.amount, currency: t.currency };
     } else {

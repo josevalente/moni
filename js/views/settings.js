@@ -7,6 +7,7 @@ import { openSplitEditor } from './close.js';
 import { categoryPicker } from './add.js';
 import { renderInvest } from './invest.js';
 import { renderDebts } from './debts.js';
+import { openAccount } from './account.js';
 
 const KINDS = [
   { v: 'expense', l: 'Gasto' }, { v: 'income', l: 'Ingreso' }, { v: 'loan', l: 'Préstamo (no es gasto)' },
@@ -155,9 +156,9 @@ function renderCategories(root) {
 }
 
 // ---------------------------------------------------------------- cuentas
-function editAccount(a) {
+export function editAccount(a) {
   const isNew = !(a && a.id);
-  formModal({
+  const fm = formModal({
     title: isNew ? 'Nueva cuenta' : 'Editar cuenta', value: a || { type: 'bank', currency: M.base() },
     fields: [
       { key: 'name', label: 'Nombre', type: 'text', required: true },
@@ -180,6 +181,8 @@ function editAccount(a) {
       if (db.all('tx').some(t => t.accountId === v.id || t.toAccountId === v.id)) { toast('Tiene movimientos: archívala en vez de eliminarla'); return; }
       await db.del('accounts', v.id);
     } : null,
+    extra: !isNew && location.hash !== '#/movs/' + a.id ? h('div', { class: 'merge-box' },
+      h('button', { type: 'button', class: 'btn', onclick: () => { fm.close(); openAccount(a.id); } }, 'Ver movimientos y cuadrar con el banco')) : null,
   });
 }
 
@@ -366,7 +369,7 @@ function renderBackup(root) {
           await db.wipe();
           // también las preferencias de este teléfono. Se vuelve a la bienvenida (importar un respaldo o empezar
           // de cero) en vez de crear personas nuevas que después se duplicarían al combinar
-          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
           location.hash = '#/'; toast('Datos borrados');
         }
       } }, 'Borrar todos los datos'))));

@@ -14,6 +14,7 @@ export function addMonths(ym, n) {
   const t = y * 12 + (m - 1) + n;
   return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
 }
+export const addDays = (date, n) => new Date(Date.parse(date + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 export const monthName = (ym) => `${MESES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
 export const monthShort = (ym) => MESES[Number(ym.slice(5, 7)) - 1].slice(0, 3);
@@ -616,6 +617,15 @@ export function pendingItems(ref = curYm(), { lastBackup = null, now = Date.now(
     .map(f => ({ id: f.id, name: f.name, days: Math.floor((now - Date.parse(lastGain.get(f.id))) / 864e5) }))
     .filter(f => f.days > 35).sort((a, b) => b.days - a.days);
   if (stale.length) items.push({ type: 'invest', key: 'invest', funds: stale });
+  // cuentas que ya se cuadraron con el banco alguna vez: se recuerda una vez al mes si tuvieron movimientos
+  const lastMove = new Map();
+  for (const t of db.all('tx')) for (const id of [t.accountId, t.toAccountId]) if (id && !(lastMove.get(id) >= t.date)) lastMove.set(id, t.date);
+  for (const a of accounts()) {
+    const r = a.reconciled;
+    if (!r || !r.date || !(lastMove.get(a.id) > r.date) || skip.has('recon:' + a.id)) continue;
+    const days = Math.floor((now - Date.parse(r.date + 'T12:00:00')) / 864e5);
+    if (days > 35) items.push({ type: 'recon', key: 'recon:' + a.id, acc: a, days, since: r.date });
+  }
   if (db.count('tx') >= 20) {
     const days = lastBackup ? Math.floor((now - Date.parse(lastBackup)) / 864e5) : Infinity;
     if (days > 14) items.push({ type: 'backup', key: 'backup', days });
@@ -631,6 +641,216 @@ export async function skipPending(catId, ym, { forever = false } = {}) {
   // solo se guardan los últimos meses
   for (const k of Object.keys(skip)) if (k < addMonths(ym, -3)) delete skip[k];
   return db.put('settings', { ...st, pendingSkip: skip });
+}
+
+// ---- Cartola por cuenta y cuadre con el banco -----------------------------------
+
+// Redondeo a los decimales de la moneda: es lo que se ve en pantalla y lo que muestra el banco.
+export function roundCur(v, cur) {
+  const f = 10 ** currencyInfo(cur).decimals;
+  return Math.round((Number(v) || 0) * f) / f + 0;   // + 0: sin "-0"
+}
+
+// Movimientos de una cuenta en orden cronológico, con su efecto en la cuenta (en su moneda) y el saldo
+// después de cada uno. Es el mismo cálculo de accountBalances: el último saldo es el de la cuenta.
+export function accountLedger(accId) {
+  const owner = ownerId();
+  const rows = [];
+  for (const tx of db.all('tx')) {
+    let delta = 0, hit = false;
+    for (const [id, v] of effects(tx, owner)) if (id === accId) { delta += v; hit = true; }
+    if (hit) rows.push({ tx, delta });
+  }
+  rows.sort((a, b) => a.tx.date.localeCompare(b.tx.date) || (a.tx.createdAt || 0) - (b.tx.createdAt || 0) || (a.tx.id < b.tx.id ? -1 : a.tx.id > b.tx.id ? 1 : 0));
+  let bal = 0;
+  for (const r of rows) { bal = Math.round((bal + r.delta) * 1e6) / 1e6; r.balance = bal; }
+  return rows;
+}
+
+// Saldo de la cuenta al cierre de un día.
+export function balanceOn(rows, date) {
+  let lo = 0, hi = rows.length - 1, best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].tx.date <= date) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best >= 0 ? rows[best].balance : 0;
+}
+
+// Desde cuándo revisar contra el banco: el día después de la última vez que cuadró o, si nunca se
+// ha cuadrado, desde el primer día del mes anterior.
+export function reviewStart(acc, date) {
+  const r = acc && acc.reconciled;
+  if (r && r.date && r.date < date) return addDays(r.date, 1);
+  return addMonths(ymOf(date), -1) + '-01';
+}
+
+// Compara el saldo de Moni con el que muestra el banco a una fecha. `bank` va con el signo de la app
+// (la deuda de una tarjeta es negativa). `ticks`: los movimientos que la persona ya encontró en el banco.
+export function compareWithBank(accId, { bank, date = todayStr(), from = null, ticks = [], hints = true, rows = null } = {}) {
+  const acc = account(accId);
+  if (!acc) return null;
+  const cur = acc.currency;
+  rows = rows || accountLedger(accId);
+  from = from || reviewStart(acc, date);
+  const moni = roundCur(balanceOn(rows, date), cur);
+  const diff = roundCur(roundCur(bank, cur) - moni, cur);
+  const tickSet = new Set(ticks);
+  const win = rows.filter(r => r.tx.date >= from && r.tx.date <= date);
+  let unticked = 0, nTicked = 0;
+  for (const r of win) { if (tickSet.has(r.tx.id)) nTicked++; else unticked += r.delta; }
+  unticked = roundCur(unticked, cur);
+  // Si lo marcado es justo lo que muestra el banco: banco = saldo antes de la revisión + marcados + lo
+  // que falta registrar. Despejando: falta = diferencia + lo no marcado.
+  const missing = roundCur(diff + unticked, cur);
+  return {
+    acc, rows, cur, date, from, bank: roundCur(bank, cur), moni, diff, ok: diff === 0, win, nTicked, unticked, missing,
+    hints: diff === 0 || !hints ? [] : reconcileHints(acc, rows, { diff, date, from }),
+  };
+}
+
+const isFlow = (t) => t.kind === 'out' || t.kind === 'in';
+const txKey = (t) => normKey(t.desc) || 'cat:' + ((category(t.categoryId) || {}).id || '');
+
+// ¿Un monto es el otro con un error de tipeo? Dos dígitos vecinos invertidos, o un dígito de más o de menos.
+export function isTypo(a, b) {
+  const x = String(a), y = String(b);
+  if (x === y) return false;
+  if (x.length === y.length) {
+    for (let i = 0; i < x.length - 1; i++) {
+      if (x[i] !== y[i]) return x[i] === y[i + 1] && x[i + 1] === y[i] && x.slice(i + 2) === y.slice(i + 2);
+    }
+    return false;
+  }
+  const [lo, hi] = x.length < y.length ? [x, y] : [y, x];
+  if (hi.length - lo.length !== 1) return false;
+  for (let i = 0; i < hi.length; i++) if (hi.slice(0, i) + hi.slice(i + 1) === lo) return true;
+  return false;
+}
+
+// Posibles explicaciones de una diferencia con el banco (diff = banco − Moni), de la más a la menos
+// probable. Cada una trae el movimiento involucrado para revisarlo o corregirlo en un toque.
+export function reconcileHints(acc, rows, { diff, date, from }) {
+  const cur = acc.currency;
+  const dec = currencyInfo(cur).decimals;
+  const unit = 10 ** -dec;
+  const r = (v) => roundCur(v, cur);
+  const same = (a, b, tol = unit / 2) => Math.abs(r(a) - r(b)) < tol + 1e-9;
+  const days = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+  const owner = ownerId();
+  const out = [];
+  const used = new Set();
+  const add = (x) => { if (x.tx) { if (used.has(x.tx.id)) return; used.add(x.tx.id); } out.push(x); };
+  const recent = rows.filter(x => x.tx.date >= from && x.tx.date <= date);
+  const newest = [...recent].reverse();   // lo más reciente primero: es lo más probable que el banco aún no muestre
+
+  // diferencia de unos pocos pesos o centavos: redondeos de compras en otra moneda
+  if (Math.abs(diff) <= (dec ? 0.05 : 10)) out.push({ type: 'small' });
+  // 1. registrado dos veces
+  for (const x of newest) {
+    if (!same(x.delta, -diff)) continue;
+    const twin = rows.find(y => y !== x && same(y.delta, x.delta) && days(y.tx.date, x.tx.date) <= 4 && txKey(y.tx) === txKey(x.tx));
+    if (twin) add({ type: 'dup', tx: x.tx, other: twin.tx });
+  }
+  // 2. lo último que se registró aún no aparece en el banco: todo lo anterior cuadra
+  let sum = 0, n = 0, lastOne = null;
+  for (const d of [...new Set(recent.map(x => x.tx.date))].sort().reverse()) {
+    if (days(d, date) > 10) break;
+    const ofDay = recent.filter(x => x.tx.date === d);
+    for (const x of ofDay) { sum += x.delta; n++; }
+    if (!same(sum, -diff, unit * 1.01)) continue;
+    if (n >= 2) out.push({ type: 'later', since: d, count: n, sum: r(sum), checkpoint: addDays(d, -1) });
+    else lastOne = { id: ofDay[0].tx.id, checkpoint: addDays(d, -1) };   // uno solo: va con su sugerencia
+    break;
+  }
+  // 3. registrado en otra cuenta (de la misma moneda) o sin cuenta
+  const lo = addDays(from, -7);
+  for (const t of db.all('tx')) {
+    if (!isFlow(t) || t.accountId === acc.id || t.date < lo || t.date > date) continue;
+    const other = t.accountId ? account(t.accountId) : null;
+    if (t.accountId ? (!other || other.currency !== cur) : (t.paidBy !== owner || t.currency !== cur)) continue;
+    if (same((t.kind === 'in' ? 1 : -1) * t.amount, diff)) add({ type: 'elsewhere', tx: t, other });
+  }
+  // 4. cuenta fija del mes que suele salir de esta cuenta y no se ha registrado
+  const billCats = new Set();
+  if (diff < 0) {
+    for (const b of pendingItems(ymOf(date)).items) {
+      if (b.type !== 'bill') continue;
+      const t = b.template;
+      // solo las que ya debieron cobrarse a esa fecha
+      if (t.accountId !== acc.id || t.paidBy !== owner || t.currency !== cur || b.day > Number(date.slice(8)) + 3) continue;
+      const fits = b.fixed ? same(t.amount, -diff) : (cur === base() && Math.abs(-diff - b.median) <= 0.12 * b.median);
+      if (fits) { billCats.add(b.catId); out.push({ type: 'bill', bill: b, amount: b.fixed ? t.amount : -diff }); }
+    }
+  }
+  // 5. cargo de todos los meses (suscripción, PAC) que este mes aún no aparece y ya debió cobrarse
+  const ym = ymOf(date), today = Number(date.slice(8));
+  const prev3 = new Set([1, 2, 3].map(k => addMonths(ym, -k)));
+  const groups = new Map();
+  for (const x of rows) {
+    const m = ymOf(x.tx.date);
+    if ((m !== ym && !prev3.has(m)) || !isFlow(x.tx) || !same(x.delta, diff)) continue;
+    if (billCats.has((category(x.tx.categoryId) || {}).id)) continue;
+    const k = txKey(x.tx);
+    let g = groups.get(k);
+    if (!g) groups.set(k, (g = { tx: x.tx, months: new Set(), days: [] }));
+    g.months.add(m);
+    if (m !== ym) g.days.push(Number(x.tx.date.slice(8)));
+    if (x.tx.date > g.tx.date) g.tx = x.tx;
+  }
+  [...groups.values()]
+    .filter(g => !g.months.has(ym) && g.months.size >= 2 && Math.min(...g.days) <= today + 3)
+    .sort((a, b) => b.months.size - a.months.size || b.tx.date.localeCompare(a.tx.date)).slice(0, 2)
+    .forEach(g => out.push({ type: 'repeat', tx: g.tx, count: g.months.size }));
+  // 6. un movimiento es justo la diferencia: no pasó por esta cuenta o el banco aún no lo muestra
+  for (const x of newest) if (same(x.delta, -diff)) add({ type: 'extra', tx: x.tx, checkpoint: lastOne && lastOne.id === x.tx.id ? lastOne.checkpoint : null });
+  // 7. registrado al revés (gasto como ingreso o al revés): descuadra el doble
+  for (const x of newest) if (isFlow(x.tx) && same(2 * x.delta, -diff, unit * 1.01)) add({ type: 'sign', tx: x.tx });
+  // 8. monto mal tipeado: con el monto correcto, cuadra
+  const f = 10 ** dec;
+  let typos = 0;
+  for (const x of newest) {
+    if (!isFlow(x.tx) || typos >= 3) continue;
+    const target = r(x.delta + diff);
+    if (!target || Math.sign(target) !== Math.sign(x.delta)) continue;
+    if (isTypo(Math.round(Math.abs(x.delta) * f), Math.round(Math.abs(target) * f))) { add({ type: 'typo', tx: x.tx, amount: Math.abs(target) }); typos++; }
+  }
+  return out.slice(0, 6);
+}
+
+// Deja constancia de que la cuenta cuadró con el banco al cierre de `date`, con ese saldo.
+export function markReconciled(accId, date, balance) {
+  const a = account(accId);
+  return db.put('accounts', { ...a, reconciled: { date, balance: roundCur(balance, a.currency), at: Date.now() } });
+}
+
+// ¿Cambió algo en lo ya conciliado? Compara el saldo de ese día con el que cuadró y lista los movimientos
+// de ese período editados o agregados después (un borrado no deja rastro: solo cambia el saldo).
+export function reconciledDrift(acc, rows = accountLedger(acc.id)) {
+  const rec = acc && acc.reconciled;
+  if (!rec || !rec.date) return null;
+  const now = roundCur(balanceOn(rows, rec.date), acc.currency);
+  const diff = roundCur(now - rec.balance, acc.currency);
+  if (!diff) return null;
+  const changed = rows.filter(x => x.tx.date <= rec.date && (x.tx.updatedAt || 0) > (rec.at || 0)).map(x => x.tx);
+  return { date: rec.date, was: rec.balance, now, diff, changed };
+}
+
+// Categoría para registrar un descuadre: entre las de ajuste ("Ajuste", "Descuadre"), la más usada en
+// esa cuenta el último año.
+export function adjustCategoryFor(accId) {
+  const adj = categories().filter(c => c.kind === 'adjust' && !c.archived);
+  const named = adj.filter(c => /ajuste|descuadre/i.test(c.name));
+  const pool = named.length ? named : adj;
+  if (!pool.length) return null;
+  const cut = addDays(todayStr(), -365);
+  const n = new Map(pool.map(c => [c.id, 0]));
+  for (const t of db.all('tx')) {
+    if (t.accountId !== accId || t.date < cut) continue;
+    const c = category(t.categoryId);
+    if (c && n.has(c.id)) n.set(c.id, n.get(c.id) + 1);
+  }
+  return category([...n.entries()].sort((a, b) => b[1] - a[1])[0][0]);
 }
 
 // ---- Series para gráficos ------------------------------------------------

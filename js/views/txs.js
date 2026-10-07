@@ -1,7 +1,8 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { fill, h } from '../ui.js';
+import { fill, h, modal } from '../ui.js';
 import { openTxForm } from './add.js';
+import { renderAccount, openAccount } from './account.js';
 
 export function txRow(tx, { showDate = false } = {}) {
   const cat = M.category(tx.categoryId);
@@ -43,7 +44,23 @@ export function txRow(tx, { showDate = false } = {}) {
 
 const state = { ym: null, q: '', filter: 'all' };
 
-export function renderTxs(root) {
+// Elegir una cuenta para ver su cartola (con su saldo y cuándo cuadró con el banco).
+export function pickAccount() {
+  const bal = M.accountBalances();
+  const row = (a) => h('button', { class: 'row', onclick: () => { m.close(); openAccount(a.id); } },
+    h('div', { class: 'main' },
+      h('div', { class: 'title' }, a.name),
+      h('div', { class: 'sub' }, [a.currency, a.reconciled && a.reconciled.date ? `✓ cuadró ${new Date(a.reconciled.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}` : null].filter(Boolean).join(' · '))),
+    h('div', { class: 'amt' + ((bal.get(a.id) || 0) < 0 ? ' neg' : '') }, M.fmt(bal.get(a.id) || 0, a.currency)),
+    h('div', { class: 'chev' }, '›'));
+  const archived = db.all('accounts').filter(a => a.archived);
+  const m = modal('Ver por cuenta', h('div', null,
+    h('div', { class: 'list' }, M.accounts().map(row)),
+    archived.length ? [h('h4', null, 'Archivadas'), h('div', { class: 'list' }, archived.map(row))] : null));
+}
+
+export function renderTxs(root, sub) {
+  if (sub) return renderAccount(root, sub);
   if (!state.ym) state.ym = M.curYm();
   const search = h('input', { type: 'search', placeholder: 'Buscar en todo el historial…', value: state.q, 'aria-label': 'Buscar movimientos' });
   let timer;
@@ -72,7 +89,8 @@ export function renderTxs(root) {
   function draw() {
     const q = state.q.trim();
     const words = q.toLowerCase().split(/\s+/).filter(Boolean).map(text => ({ text, num: /^-?[\d.,]+$/.test(text) && Number.isFinite(M.parseAmount(text)) ? M.parseAmount(text) : null }));
-    fill(chips, ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), 'aria-pressed': String(state.filter === k), onclick: () => { state.filter = k; draw(); } }, l)));
+    fill(chips, h('button', { class: 'chip more', onclick: pickAccount }, '🏦 Por cuenta'),
+      ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), 'aria-pressed': String(state.filter === k), onclick: () => { state.filter = k; draw(); } }, l)));
     fill(head, q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [
       h('button', { class: 'icon-btn', onclick: () => { state.ym = M.addMonths(state.ym, -1); draw(); }, 'aria-label': 'Mes anterior' }, '‹'),
       h('strong', null, M.monthName(state.ym)),

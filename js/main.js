@@ -111,7 +111,12 @@ async function resetAppCache() {
 
 async function start() {
   await db.open();
-  document.getElementById('fab').addEventListener('click', () => openTxForm(null));
+  document.getElementById('fab').addEventListener('click', () => {
+    // en la cartola de una cuenta, el movimiento nuevo es de esa cuenta
+    const { tab, sub } = parseHash();
+    const acc = tab === 'movs' && sub ? M.account(sub) : null;
+    openTxForm(null, acc && !acc.archived ? { accountId: acc.id, lockAccount: true } : {});
+  });
   if (!navigator.onLine) document.body.classList.add('offline');
   draw();
   window.__moniStarted = true;

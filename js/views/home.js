@@ -7,6 +7,7 @@ import { openCategoryDetail } from './reports.js';
 import { openTxForm } from './add.js';
 import { showCloseMonth } from './close.js';
 import { exportBackup } from './settings.js';
+import { openAccount } from './account.js';
 
 const st = { mode: 'total', ym: null, laterOpen: false, zeroOpen: false, fixedOpen: false };
 
@@ -87,6 +88,11 @@ function pendingRow(i, ref, root) {
     title = `Cierre de ${M.monthName(i.ym).toLowerCase()}`;
     sub = i.transfers.map(t => `${M.personName(t.from)} paga ${M.fmt(t.amount, base)} a ${M.personName(t.to)}`).join(' · ');
     action = h('button', { class: 'btn small', onclick: () => showCloseMonth(i.ym) }, 'Ver cierre');
+  } else if (i.type === 'recon') {
+    icon = '🏦';
+    title = `Cuadrar ${i.acc.name} con el banco`;
+    sub = `La última vez fue el ${new Date(i.since + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })} (${ago(i.days)})`;
+    action = h('button', { class: 'btn small', onclick: () => openAccount(i.acc.id) }, 'Cuadrar');
   } else if (i.type === 'invest') {
     icon = '📈';
     const f = i.funds;
@@ -103,7 +109,11 @@ function pendingRow(i, ref, root) {
     h('div', { class: 'icon', 'aria-hidden': 'true' }, icon),
     h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub)),
     h('div', { class: 'row-actions' }, action,
-      i.type === 'bill' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir ${i.cat.name}`, onclick: () => skipBill(i, ref) }, '✕') : null));
+      i.type === 'bill' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir ${i.cat.name}`, onclick: () => skipBill(i, ref) }, '✕') : null,
+      i.type === 'recon' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir este mes: cuadrar ${i.acc.name}`, onclick: async () => {
+        await M.skipPending('recon:' + i.acc.id, ref);
+        toast('Omitido este mes');
+      } }, '✕') : null));
 }
 
 function pendingCard(root) {
@@ -189,9 +199,13 @@ export function renderHome(root) {
   const isZero = (x) => Math.abs(x.v) < (M.currencyInfo(x.a.currency).decimals ? 0.005 : 1);
   const accMain = accAll.filter(x => !isZero(x));
   const accZero = accAll.filter(isZero);
-  const accRow = ({ a, v }) => h('div', { class: 'row static' },
-    h('div', { class: 'main' }, h('div', { class: 'title' }, a.name), h('div', { class: 'sub' }, a.type === 'credit' ? 'Tarjeta / crédito' : a.type === 'cash' ? 'Efectivo' : 'Cuenta')),
-    h('div', { class: 'amt ' + (v < 0 ? 'neg' : '') }, M.fmt(v, a.currency)));
+  // cada cuenta abre su cartola: sus movimientos con el saldo de cada día, para cuadrarla con el banco
+  const accRow = ({ a, v }) => h('button', { class: 'row', onclick: () => openAccount(a.id) },
+    h('div', { class: 'main' }, h('div', { class: 'title' }, a.name), h('div', { class: 'sub' },
+      [a.type === 'credit' ? 'Tarjeta / crédito' : a.type === 'cash' ? 'Efectivo' : 'Cuenta',
+        a.reconciled && a.reconciled.date ? `✓ cuadró ${new Date(a.reconciled.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}` : null].filter(Boolean).join(' · '))),
+    h('div', { class: 'amt ' + (v < 0 ? 'neg' : '') }, M.fmt(v, a.currency)),
+    h('div', { class: 'chev', 'aria-hidden': 'true' }, '›'));
 
   // últimos 6: se ordenan solo los de las últimas semanas (no los ~7.000 del historial)
   const cut = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
