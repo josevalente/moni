@@ -111,13 +111,13 @@ export function modal(title, body, { actions, wide, onClose, dismissable = true 
   return { close, sheet, back };
 }
 
-export function confirmDialog(message, { ok = 'Eliminar', danger = true } = {}) {
+export function confirmDialog(message, { ok = 'Eliminar', danger = true, cancel = 'Cancelar' } = {}) {
   return new Promise((resolve) => {
     let done = false;
     const finish = (v) => { if (done) return; done = true; m.close(); resolve(v); };
     const m = modal('Confirmar', h('p', null, message), {
       actions: [
-        h('button', { class: 'btn', onclick: () => finish(false) }, 'Cancelar'),
+        h('button', { class: 'btn', onclick: () => finish(false) }, cancel),
         h('button', { class: 'btn ' + (danger ? 'danger' : 'primary'), onclick: () => finish(true) }, ok),
       ],
       onClose: () => finish(false),

@@ -260,7 +260,32 @@ export const isUnits = (i) => i && i.type === 'units';
 const POINTS_RE = /premio|pass\b|millas|miles|puntos|points|cmr|lanpass/i;
 export const looksLikePoints = (i) => !isPoints(i) && (currencyInfo(i.currency).convertible === false || POINTS_RE.test(i.name || ''));
 
-const entriesOf = (id) => db.all('invEntries').filter(e => e.invId === id).sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
+// Categorías asociadas a una inversión (ej. "AFP"): cada movimiento de la categoría cuenta como aporte
+// (gasto) o retiro (ingreso), desde la fecha indicada. No se copian datos: vale para lo histórico y lo futuro,
+// y se deshace quitando la asociación.
+export function linkedEntries(invId) {
+  const inv = db.get('investments', invId);
+  if (!inv) return [];
+  const cats = new Map(db.all('categories').filter(c => c.invId === invId).map(c => [c.id, c]));
+  if (!cats.size) return [];
+  const out = [];
+  for (const t of db.all('tx')) {
+    if (t.kind !== 'out' && t.kind !== 'in') continue;
+    const c = cats.get((category(t.categoryId) || {}).id);
+    if (!c || (c.invFrom && t.date < c.invFrom)) continue;
+    // en la moneda de la inversión (si es otra, vía moneda base al tipo de cambio de esa fecha)
+    let amount = t.amount;
+    if (t.currency !== inv.currency) { const r = rateFor(inv.currency, t.date); amount = r ? txBase(t) / r : txBase(t); }
+    out.push({ id: 'tx:' + t.id, invId, date: t.date, kind: t.kind === 'out' ? 'contrib' : 'withdraw', amount, note: t.desc || c.name,
+      fromTx: t.id, fromCat: c.id, createdAt: t.createdAt });
+  }
+  return out;
+}
+
+// Registros de una inversión (los propios y los que vienen de categorías asociadas), en orden.
+export const investmentEntries = (id) => [...db.all('invEntries').filter(e => e.invId === id), ...linkedEntries(id)]
+  .sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
+const entriesOf = investmentEntries;
 
 // Precio de una inversión por cantidad a una fecha: el último precio consultado o ingresado, o el de
 // la última compra/venta si es más reciente.
@@ -281,20 +306,25 @@ export function fundStats(inv, asOf = todayStr(), entries = null) {
   entries = entries || entriesOf(inv.id);
   const units = isUnits(inv);
   let contrib = 0, withdraw = 0, gain = 0, divPaid = 0, divReinv = 0, div12 = 0, qty = 0, cost = 0, realized = 0, last = null;
+  // valor (por valor): cada valorización fija el valor total de ese día. Las del Excel se guardaron como
+  // diferencia: su valor total es la suma de los registros propios hasta ahí (sin los aportes que llegan de
+  // una categoría asociada después), así asociar una categoría no infla el valor.
+  let bal = 0, manualCum = 0;
   const cut12 = addDays(asOf, -365);
   // una inversión que se llevaba por valor y pasó a cantidad: hasta esa fecha vale lo registrado;
   // desde ahí, la cantidad inicial × precio (con ese valor como costo)
   let switched = !units || !inv.unitsFrom;
-  const doSwitch = () => { qty = inv.unitsStart || 0; cost = contrib - withdraw + gain + divReinv; switched = true; };
+  const doSwitch = () => { qty = inv.unitsStart || 0; cost = bal; switched = true; };
   for (const e of entries) {
     if (e.date > asOf) break;
     if (!switched && e.date >= inv.unitsFrom) doSwitch();
     const a = Number(e.amount) || 0;
+    const own = !e.fromTx;
     if (e.kind === 'contrib') {
-      contrib += a;
+      contrib += a; bal += a; if (own) manualCum += a;
       if (units && e.units) { qty += e.units; cost += a; }
     } else if (e.kind === 'withdraw') {
-      withdraw += a;
+      withdraw += a; bal -= a; if (own) manualCum -= a;
       if (units && e.units) {
         const avg = qty > 0 ? cost / qty : 0;
         const n = Math.min(e.units, qty);
@@ -302,9 +332,12 @@ export function fundStats(inv, asOf = todayStr(), entries = null) {
         if (qty < 1e-9) { qty = 0; cost = 0; }
       }
     } else if (e.kind === 'dividend') {
-      if (e.reinvested) { divReinv += a; if (units && e.units) { qty += e.units; cost += a; } } else divPaid += a;
+      if (e.reinvested) { divReinv += a; bal += a; manualCum += a; if (units && e.units) { qty += e.units; cost += a; } } else divPaid += a;
       if (e.date > cut12) div12 += a;
-    } else gain += a;
+    } else {
+      const target = e.value != null ? e.value : manualCum + a;
+      gain += target - bal; bal = target; manualCum += a;
+    }
     if (!last || e.date > last) last = e.date;
   }
   if (!switched && asOf >= inv.unitsFrom) doSwitch();
@@ -313,7 +346,7 @@ export function fundStats(inv, asOf = todayStr(), entries = null) {
   if (units && switched) {
     price = priceAt(inv, asOf, entries);
     balance = price ? qty * price.price : cost;
-  } else balance = invested + gain + divReinv;
+  } else balance = bal;
   const totalGain = balance - invested + divPaid;
   return {
     contrib, withdraw, gain, invested, balance, last, divPaid, divReinv, div12, totalGain,
@@ -1055,10 +1088,24 @@ export function firstInvestmentMonth(invId = null) {
   let first = null;
   const skip = new Set(invId ? [] : db.all('investments').filter(isPoints).map(i => i.id));
   for (const e of db.all('invEntries')) if ((invId ? e.invId === invId : !skip.has(e.invId)) && (!first || e.date < first)) first = e.date;
+  const linked = invId ? [invId] : [...new Set(db.all('categories').filter(c => c.invId).map(c => c.invId))].filter(id => !skip.has(id));
+  for (const id of linked) for (const e of linkedEntries(id)) if (!first || e.date < first) first = e.date;
   return first ? first.slice(0, 7) : null;
 }
 
 // ---- Datos iniciales para una instalación nueva --------------------------
+
+// Al asociar una categoría: si la inversión ya tiene aportes ingresados a mano en fechas en que la categoría
+// también tiene movimientos, contar ambos sería duplicarlos. Devuelve el día siguiente al último aporte manual.
+export function linkOverlap(catId, invId) {
+  const manual = db.all('invEntries').filter(e => e.invId === invId && e.kind === 'contrib');
+  if (!manual.length) return null;
+  const last = manual.map(e => e.date).sort().at(-1);
+  const txs = db.all('tx').filter(t => (t.kind === 'out' || t.kind === 'in') && (category(t.categoryId) || {}).id === catId);
+  const overlap = txs.filter(t => t.date <= last).length;
+  if (!overlap) return null;
+  return { last, from: addDays(last, 1), manual: manual.length, overlap, total: txs.length };
+}
 
 export async function seedDefaults() {
   if (db.count('people') || db.count('categories')) return;

@@ -18,7 +18,7 @@ async function updateBalance(p) {
   if (!Number.isFinite(n)) { toast('Valor no válido'); return; }
   const diff = n - p.balance;
   if (Math.abs(diff) < 0.005) { toast('Sin cambios'); return; }
-  await db.put('invEntries', { invId: p.id, date: M.todayStr(), kind: 'gain', amount: diff, note: 'Saldo actualizado' });
+  await db.put('invEntries', { invId: p.id, date: M.todayStr(), kind: 'gain', amount: diff, value: n, note: 'Saldo actualizado' });
   toast(`Saldo actualizado (${diff > 0 ? '+' : ''}${amountOf(p, diff)})`);
 }
 

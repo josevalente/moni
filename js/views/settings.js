@@ -21,6 +21,43 @@ const MODES = [{ v: 'prop', l: 'Proporcional a los sueldos' }, { v: 'equal', l: 
 const back = (to = '#/mas') => h('a', { class: 'backlink', href: to }, '‹ Más');
 
 // ---------------------------------------------------------------- categorías
+// inversiones a las que se puede asociar una categoría (las por valor; puntos y millas no)
+function invOptions(c) {
+  return db.all('investments').filter(i => !M.isPoints(i) && (!i.archived || i.id === (c && c.invId)))
+    .sort((a, b) => a.name.localeCompare(b.name)).map(i => ({ v: i.id, l: `${i.name} (${i.currency})` }));
+}
+
+// Tras asociar una categoría a una inversión: evitar contar dos veces los aportes ya ingresados a mano y
+// ofrecer que deje de contar como gasto.
+async function afterLink(cat) {
+  const inv = db.get('investments', cat.invId);
+  const dLong = (d) => new Date(d + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' });
+  const ov = cat.invFrom ? null : M.linkOverlap(cat.id, inv.id);
+  if (ov) {
+    const from = await new Promise((resolve) => {
+      let done = false;
+      const pick = (v) => { if (done) return; done = true; m.close(); resolve(v); };
+      const m = modal('¿Desde cuándo?', h('div', null,
+        h('p', null, `La inversión ${inv.name} ya tiene ${M.fmtInt(ov.manual)} aportes ingresados a mano, hasta el ${dLong(ov.last)}. En ese período la categoría ${cat.name} tiene ${M.fmtInt(ov.overlap)} movimientos: contarlos también duplicaría esos aportes.`),
+        h('p', { class: 'muted small' }, `Recomendado: contar los movimientos de la categoría desde el ${dLong(ov.from)}.`)), {
+        actions: [
+          h('button', { class: 'btn', onclick: () => pick(null) }, 'Todo el historial'),
+          h('button', { class: 'btn primary', onclick: () => pick(ov.from) }, `Desde el ${dLong(ov.from)}`),
+        ],
+        onClose: () => pick(ov.from),
+      });
+    });
+    if (from) await db.put('categories', { ...db.get('categories', cat.id), invFrom: from });
+  }
+  const n = M.linkedEntries(inv.id).filter(e => e.fromCat === cat.id).length;
+  toast(`${cat.name}: ${M.fmtInt(n)} movimientos cuentan como aporte a ${inv.name}`, { ms: 6000 });
+  // un aporte a una inversión no es un gasto: se ofrece cambiar su naturaleza (sale de los reportes de gasto)
+  if (cat.kind === 'expense' && await confirmDialog(`¿Dejar de contar ${cat.name} como gasto? Sus movimientos saldrán de los reportes de gastos y de "Gastado en el mes" (siguen en las cuentas y en el cierre igual que antes). Puedes volver a cambiarlo en Naturaleza.`, { ok: 'Sí, es inversión', cancel: 'Mantener como gasto', danger: false })) {
+    await db.put('categories', { ...db.get('categories', cat.id), kind: 'invest' });
+    toast(`${cat.name} ahora es de tipo Inversión`);
+  }
+}
+
 export function editCategory(c) {
   const isNew = !(c && c.id);
   const people = M.people();
@@ -56,12 +93,18 @@ export function editCategory(c) {
           } };
         },
       },
+      { key: 'invId', label: 'Sumar como aporte a la inversión', type: 'select', options: [{ v: '', l: '— ninguna —' }, ...invOptions(c)],
+        hint: 'Cada gasto de esta categoría (pasado y futuro) cuenta como aporte a esa inversión, y cada ingreso como retiro. Ej: la categoría AFP y tu inversión AFP.' },
+      { key: 'invFrom', label: 'Contar desde (opcional)', type: 'date', show: (v) => !!v.invId, hint: 'Vacío: todo el historial de la categoría.' },
       { key: 'archived', label: 'Archivada (no aparece al registrar)', type: 'check' },
     ],
     onSave: async (v) => {
       if (v.splitMode !== 'fixed') delete v.fixedPct;
       else if (!v.fixedPct || !Object.values(v.fixedPct).some(x => x > 0)) { toast('Indica los porcentajes fijos'); return false; }
-      await db.put('categories', v); toast('Categoría guardada');
+      if (!v.invId) { delete v.invId; delete v.invFrom; } else if (!v.invFrom) delete v.invFrom;
+      const saved = await db.put('categories', v);
+      if (v.invId && (v.invId !== (c && c.invId) || v.invFrom !== (c && c.invFrom))) await afterLink(saved);
+      else toast('Categoría guardada');
     },
     onDelete: !isNew ? async (v) => {
       const used = db.all('tx').some(t => t.categoryId === v.id);
@@ -147,7 +190,7 @@ function renderCategories(root) {
     }
     fill(list, cleanupCard(), ...[...groups.entries()].map(([g, cs]) => h('section', { class: 'card' }, h('h3', null, g), cs.map(c => h('button', { class: 'row' + (c.archived ? ' dim' : ''), onclick: () => editCategory(c) },
       h('div', { class: 'main' }, h('div', { class: 'title' }, `${c.icon || ''} ${c.name}`.trim()),
-        h('div', { class: 'sub' }, [KIND_L[c.kind], c.defaultAlloc === 'shared' ? (c.splitMode === 'fixed' ? 'compartido (fijo)' : c.splitMode === 'equal' ? 'compartido (50/50)' : 'compartido') : c.defaultAlloc && c.defaultAlloc.startsWith('p:') ? `solo de ${M.personName(c.defaultAlloc.slice(2))}` : null, c.archived ? (c.mergedInto ? `combinada en ${(M.category(c.id) || {}).name || '?'}` : 'archivada') : null].filter(Boolean).join(' · '))),
+        h('div', { class: 'sub' }, [KIND_L[c.kind], c.defaultAlloc === 'shared' ? (c.splitMode === 'fixed' ? 'compartido (fijo)' : c.splitMode === 'equal' ? 'compartido (50/50)' : 'compartido') : c.defaultAlloc && c.defaultAlloc.startsWith('p:') ? `solo de ${M.personName(c.defaultAlloc.slice(2))}` : null, c.invId ? `aporte a ${(db.get('investments', c.invId) || {}).name || '?'}` : null, c.archived ? (c.mergedInto ? `combinada en ${(M.category(c.id) || {}).name || '?'}` : 'archivada') : null].filter(Boolean).join(' · '))),
       h('div', { class: 'amt muted' }, `${counts.get(c.id) || 0}`))))));
   };
   q.addEventListener('input', draw);

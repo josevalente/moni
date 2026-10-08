@@ -9,6 +9,7 @@ import * as FX from '../fx.js';
 import * as PX from '../prices.js';
 import { fill, h, modal, toast, formModal, promptDialog, parseNum, confirmDialog } from '../ui.js';
 import { lineChart, sparkline, vizCard, dataTable } from '../charts.js';
+import { openTxForm } from './add.js';
 
 const HORIZONS = [{ v: 'short', l: 'Corto / mediano plazo' }, { v: 'long', l: 'Largo plazo (AFP, APV…)' }];
 const TYPES = [{ v: 'fund', l: 'Por valor: actualizo el saldo total' }, { v: 'units', l: 'Por cantidad: acciones, ETF, fondos mutuos, cripto' }];
@@ -74,7 +75,9 @@ async function updateValue(inv) {
   if (!Number.isFinite(n)) { toast('Valor no válido'); return; }
   const diff = n - s.balance;
   if (Math.abs(diff) < Math.pow(10, -info.decimals) / 2) { toast('Sin cambios'); return; }
-  await db.put('invEntries', { invId: inv.id, date: M.todayStr(), kind: 'gain', amount: diff, note: 'Actualización de valor' });
+  // se guarda el valor total (no solo la diferencia): así los aportes que lleguen después de una categoría
+  // asociada no lo alteran
+  await db.put('invEntries', { invId: inv.id, date: M.todayStr(), kind: 'gain', amount: diff, value: n, note: 'Actualización de valor' });
   toast(`Valorización ${M.fmt(diff, inv.currency, { sign: true })}`);
 }
 
@@ -235,9 +238,21 @@ function dividendForm(inv, e = null) {
 }
 
 function editEntry(inv, e) {
+  if (e.fromTx) { const t = db.get('tx', e.fromTx); if (t) openTxForm(t); return; }      // viene de una categoría asociada
   if (e.kind === 'dividend') return dividendForm(inv, e);
   if (M.isUnits(inv) && e.units) return tradeForm(inv, e.kind, e);
   if ((e.kind === 'contrib' || e.kind === 'withdraw') && e.txId) return moneyForm(inv, e.kind, e);
+  if (e.kind === 'gain' && e.value != null) {
+    return formModal({
+      title: 'Editar valorización', value: e,
+      fields: [
+        { key: 'value', label: `Valor total (${inv.currency})`, type: 'number', required: true },
+        { key: 'date', label: 'Fecha', type: 'date', required: true },
+        { key: 'note', label: 'Nota', type: 'text' },
+      ],
+      onSave: (v) => db.put('invEntries', v), onDelete: () => removeEntry(e),
+    });
+  }
   formModal({
     title: 'Editar registro', value: e,
     fields: [
@@ -411,7 +426,8 @@ function openDetail(id) {
     const s = M.fundStats(inv);
     const cur = inv.currency;
     const units = M.isUnits(inv);
-    const entries = db.all('invEntries').filter(e => e.invId === id).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 120);
+    const entries = M.investmentEntries(id).reverse().slice(0, 150);
+    const linkedCats = db.all('categories').filter(c => c.invId === id);
     const first = M.firstInvestmentMonth(id);
     const months = first ? M.monthsBetween(first, M.curYm()) : [];
     const annual = M.annualReturn(inv);
@@ -446,13 +462,15 @@ function openDetail(id) {
         h('button', { class: 'btn', onclick: () => dividendForm(inv) }, 'Dividendo'),
       ]),
       valueChart({ months, hist: M.fundHistory(id, months), cur, title: 'Evolución', subtitle: `En ${cur}, al cierre de cada mes`, footnote: units ? 'Valor = cantidad × precio al cierre de cada mes.' : AFP_NOTE }),
+      linkedCats.length ? h('p', { class: 'muted small' }, `Los movimientos de ${linkedCats.map(c => c.name + (c.invFrom ? ` (desde el ${dShort(c.invFrom)})` : '')).join(', ')} cuentan como aportes. Se cambia en Más › Categorías.`) : null,
       h('h4', null, 'Historial'),
       entries.map(e => {
         const amt = e.kind === 'withdraw' ? -e.amount : e.amount;
         const what = e.units ? `${fmtQty(e.units)} × ${fmtPrice(e.price, cur)}${e.byTotal ? ' (promedio)' : ''}` : null;
         const extra = e.kind === 'dividend' ? (e.reinvested ? 'reinvertido' : e.txId && db.get('tx', e.txId) ? `a ${(M.account(db.get('tx', e.txId).accountId) || {}).name || 'cuenta'}` : 'pagado') : null;
         return h('button', { class: 'row', onclick: () => editEntry(inv, e) },
-          h('div', { class: 'main' }, h('div', { class: 'title' }, kindLabel(inv, e)), h('div', { class: 'sub' }, [dShort(e.date), what, extra, e.note].filter(Boolean).join(' · '))),
+          h('div', { class: 'main' }, h('div', { class: 'title' }, kindLabel(inv, e) + (e.fromCat ? ` · ${(M.category(e.fromCat) || {}).name || ''}` : '')),
+            h('div', { class: 'sub' }, [dShort(e.date), what, extra, e.fromTx ? 'movimiento' : null, e.note].filter(Boolean).join(' · '))),
           h('div', { class: 'amt ' + (amt < 0 ? 'neg' : '') }, M.fmt(amt, cur)));
       }),
       inv.unitsFrom ? h('p', { class: 'muted small' }, `Por cantidad desde el ${dShort(inv.unitsFrom)} (${fmtQty(inv.unitsStart)} ${unitWord(inv)} iniciales); antes, por valor.`) : null,
