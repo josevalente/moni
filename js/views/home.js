@@ -159,6 +159,24 @@ function pendingCard(root) {
     } }, 'Mostrar el número de pendientes en el ícono de la app') : null);
 }
 
+// ---- Ingresos del mes por categoría (como el gasto); los extraordinarios, marcados ------------
+function incomeCard(ym, base) {
+  const pid = st.mode === 'mine' ? M.meId() : null;
+  const mx = M.categoryMatrix([ym], { kind: 'income', mode: st.mode, pid });
+  const rows = mx.rows.filter(r => r.total > 0);
+  if (!rows.length) return null;
+  const total = mx.totals[0];
+  return h('section', { class: 'card' },
+    h('div', { class: 'card-head' }, h('h3', null, `Ingresos de ${M.monthName(ym).split(' ')[0].toLowerCase()}`), h('span', { class: 'muted small' }, M.fmt(total, base))),
+    bars(rows.slice(0, 8).map(r => {
+      const c = M.category(r.catId);
+      return { label: `${((c && c.icon) || '')} ${r.label}${c && c.extraordinary ? ' · extraordinario' : ''}`.trim(), v: r.total,
+        onclick: () => openCategoryDetail({ catId: r.catId, kind: 'income', mode: st.mode, period: '12' }) };
+    }), { fmt: (v) => M.fmt(v, base) }),
+    h('div', { class: 'card-foot' }, h('span', { class: 'muted small' }, 'Toca una categoría para ver sus meses y movimientos'),
+      h('a', { class: 'btn small', href: '#/reportes', onclick: () => { try { sessionStorage.setItem('moni.reportKind', 'income'); } catch { /* ignore */ } } }, 'Ver mes a mes')));
+}
+
 // ---- Inicio -------------------------------------------------------------------------
 
 export function renderHome(root) {
@@ -257,6 +275,7 @@ export function renderHome(root) {
       accZero.length ? h('button', { class: 'link-row', onclick: () => { st.zeroOpen = !st.zeroOpen; renderHome(root); } },
         st.zeroOpen ? 'Ocultar las cuentas en cero' : `${accZero.length} cuentas en cero`) : null,
       st.zeroOpen ? accZero.map(accRow) : null),
+    incomeCard(ym, base),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' }, h('h3', null, 'Últimos movimientos'), h('a', { href: '#/movs' }, 'Ver todos')),
       recents.length ? recents.map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Toca ＋ para registrar tu primer movimiento.')));

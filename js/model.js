@@ -1222,7 +1222,7 @@ export function txYears() {
 
 // Matriz categoría (o grupo) × mes en moneda base, para los reportes.
 // kind 'expense' | 'income' · mode 'total' (hogar) | 'mine' (mi parte) · by 'category' | 'group'
-export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 'category', pid = null } = {}) {
+export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 'category', pid = null, extraordinary = true } = {}) {
   const idx = new Map(months.map((m, i) => [m, i]));
   const ps = people();
   const me = pid || meId();
@@ -1238,6 +1238,7 @@ export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 
     const cat = category(tx.categoryId);
     if (!cat || cat.kind !== kind) continue;
     if (kind === 'income' && tx.kind !== 'in') continue;
+    if (!extraordinary && cat.extraordinary) continue;
     // en gastos, una devolución (ingreso en una categoría de gasto) resta
     let v = txBase(tx) * (kind === 'expense' && tx.kind === 'in' ? -1 : 1) * (kind === 'expense' ? expenseFactor(tx, cat) : 1);
     if (mode === 'mine') {
