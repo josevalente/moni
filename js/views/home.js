@@ -171,6 +171,7 @@ export function renderHome(root) {
   const sum = settleText(led.balance);
   const spend = M.spendingByCategory(ym, st.mode);
   const income = M.incomeOfMonth(ym, st.mode === 'mine' ? M.meId() : null);
+  const extraIncome = income - M.incomeOfMonth(ym, st.mode === 'mine' ? M.meId() : null, { extraordinary: false });
   // "mes típico": la mediana de los 6 meses cerrados anteriores. Con el promedio, una compra puntual
   // (un auto, una propiedad) lo inflaría y cualquier mes normal parecería bajo.
   const prev6 = M.monthsBetween(M.addMonths(ym, -6), M.addMonths(ym, -1));
@@ -233,7 +234,9 @@ export function renderHome(root) {
       })), { fmt: (v) => M.fmt(v, base) })
         : h('p', { class: 'empty' }, 'Aún no hay gastos este mes.'),
       h('div', { class: 'card-foot' },
-        h('span', { class: 'muted small' }, `Ingresos ${M.fmt(income, base)} · balance ${M.fmt(income - spend.total, base)}`),
+        h('span', { class: 'muted small' }, extraIncome
+          ? `Ingresos ${M.fmt(income - extraIncome, base)} (+ ${M.fmt(extraIncome, base)} extraordinarios) · balance ${M.fmt(income - extraIncome - spend.total, base)}`
+          : `Ingresos ${M.fmt(income, base)} · balance ${M.fmt(income - spend.total, base)}`),
         h('a', { class: 'btn small', href: '#/reportes' }, 'Ver mes a mes'))),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' },
@@ -243,6 +246,7 @@ export function renderHome(root) {
         h('div', null, h('span', null, 'Cuentas'), M.fmt(nw.cash, base)),
         h('div', null, h('span', null, 'Tarjetas'), M.fmt(nw.cards, base)),
         h('div', null, h('span', null, 'Inversiones'), M.fmt(nw.inv, base)),
+        nw.props ? h('div', null, h('span', null, 'Propiedades'), M.fmt(nw.props, base)) : null,
         h('div', null, h('span', null, 'Deudas'), M.fmt(nw.debts, base)),
         nw.points ? h('div', null, h('span', null, 'Puntos y millas'), M.fmt(nw.points, base)) : null),
       nw.missing.length ? h('div', { class: 'warn' }, `Falta tipo de cambio de ${nw.missing.join(', ')}; se asumió 1. Actualízalo en Más › Monedas.`) : null,

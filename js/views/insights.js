@@ -96,18 +96,19 @@ export function openNetWorth() {
           h('span', { class: 'tile-delta' }, `de gasto típico (${M.fmt(typical, base)})`)) : null),
       vizCard({
         title: 'Patrimonio neto',
-        subtitle: `En ${base} al cierre de cada mes · cuentas + tarjetas + inversiones + deudas`,
+        subtitle: `En ${base} al cierre de cada mes · cuentas + tarjetas + inversiones + propiedades − deudas`,
         chart: lineChart({
           points: months.map(ym => ({ short: M.monthShort(ym).toLowerCase(), long: M.monthName(ym), ym })), cur: base,
           series: [{ name: 'Patrimonio', values: comp('total'), color: '--viz-1', area: true }],
           extra: (i) => [
             { value: M.fmt(hist[i].cash + hist[i].cards, base), label: 'Cuentas y tarjetas' },
             { value: M.fmt(hist[i].inv, base), label: 'Inversiones' },
+            hist[i].props ? { value: M.fmt(hist[i].props, base), label: 'Propiedades' } : null,
             hist[i].debts ? { value: M.fmt(hist[i].debts, base), label: 'Deudas' } : null].filter(Boolean),
           ariaLabel: `Patrimonio neto: ${M.fmt(last.total, base)} hoy`,
         }),
-        table: dataTable(['Mes', 'Patrimonio', 'Cuentas', 'Tarjetas', 'Inversiones', 'Deudas'],
-          hist.map(p => [M.monthName(p.ym), M.fmt(p.total, base), M.fmt(p.cash, base), M.fmt(p.cards, base), M.fmt(p.inv, base), M.fmt(p.debts, base)]).reverse()),
+        table: dataTable(['Mes', 'Patrimonio', 'Cuentas', 'Tarjetas', 'Inversiones', 'Propiedades', 'Deudas'],
+          hist.map(p => [M.monthName(p.ym), M.fmt(p.total, base), M.fmt(p.cash, base), M.fmt(p.cards, base), M.fmt(p.inv, base), M.fmt(p.props, base), M.fmt(p.debts, base)]).reverse()),
         footnote: (jump && Math.abs(jump.d) > Math.abs(last.total) * 0.15
           ? `El mayor cambio fue en ${M.monthName(hist[jump.k].ym).toLowerCase()} (${M.fmt(jump.d, base, { sign: true })}). Si fue una compra de un activo registrada como gasto, márcala como Inversión en su categoría. `
           : '') + 'No incluye puntos y millas; las deudas excluidas del patrimonio tampoco.',

@@ -4,12 +4,12 @@
 // Actualizaciones atómicas: cada versión se descarga completa al instalarse (saltándose la caché del
 // CDN con ?v=VERSION) y se sirve solo desde su propia caché. Nunca se mezclan archivos de dos versiones.
 // Sube VERSION cada vez que publiques cambios.
-const VERSION = 'moni-v16';
+const VERSION = 'moni-v17';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/db.js', './js/model.js', './js/fx.js', './js/prices.js', './js/ui.js', './js/charts.js',
   './js/views/home.js', './js/views/txs.js', './js/views/add.js', './js/views/close.js',
-  './js/views/invest.js', './js/views/debts.js', './js/views/settings.js', './js/views/reports.js', './js/views/account.js', './js/views/points.js', './js/views/insights.js',
+  './js/views/invest.js', './js/views/debts.js', './js/views/settings.js', './js/views/reports.js', './js/views/account.js', './js/views/points.js', './js/views/insights.js', './js/views/properties.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-180.png',
 ];
 const scope = self.registration.scope;

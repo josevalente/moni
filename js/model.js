@@ -268,7 +268,10 @@ export function netWorth() {
   // puntos y millas: no suman, salvo los programas marcados "cuenta en mi patrimonio"
   let points = 0;
   for (const p of pointsSummaries()) if (p.inNetWorth && p.valueBase != null) points += p.valueBase;
-  return { cash, cards, inv, debts, points, total: cash + cards + inv + debts + points, missing: [...missing] };
+  // propiedades: su valor menos la parte del socio en la plusvalía (el crédito ya está en deudas)
+  let props = 0;
+  for (const p of propertySummaries()) props += (p.value - p.partnerClaim) * (rateFor(p.currency, todayStr()) ?? 1);
+  return { cash, cards, inv, debts, points, props, total: cash + cards + inv + debts + points + props, missing: [...missing] };
 }
 
 // ---- Inversiones ---------------------------------------------------------
@@ -278,7 +281,8 @@ export function netWorth() {
 export const isPoints = (i) => i && i.type === 'points';
 export const isUnits = (i) => i && i.type === 'units';
 const POINTS_RE = /premio|pass\b|millas|miles|puntos|points|cmr|lanpass/i;
-export const looksLikePoints = (i) => !isPoints(i) && (currencyInfo(i.currency).convertible === false || POINTS_RE.test(i.name || ''));
+export const isProperty = (i) => i && i.type === 'property';
+export const looksLikePoints = (i) => !isPoints(i) && !isProperty(i) && (currencyInfo(i.currency).convertible === false || POINTS_RE.test(i.name || ''));
 
 // Categorías asociadas a una inversión (ej. "AFP"): cada movimiento de la categoría cuenta como aporte
 // (gasto) o retiro (ingreso), desde la fecha indicada. No se copian datos: vale para lo histórico y lo futuro,
@@ -329,7 +333,7 @@ export function fundStats(inv, asOf = todayStr(), entries = null) {
   // valor (por valor): cada valorización fija el valor total de ese día. Las del Excel se guardaron como
   // diferencia: su valor total es la suma de los registros propios hasta ahí (sin los aportes que llegan de
   // una categoría asociada después), así asociar una categoría no infla el valor.
-  let bal = 0, manualCum = 0;
+  let bal = 0, manualCum = 0, appraisal = null;
   const cut12 = addDays(asOf, -365);
   // una inversión que se llevaba por valor y pasó a cantidad: hasta esa fecha vale lo registrado;
   // desde ahí, la cantidad inicial × precio (con ese valor como costo)
@@ -359,6 +363,7 @@ export function fundStats(inv, asOf = todayStr(), entries = null) {
     } else {
       const target = e.value != null ? e.value : manualCum + a;
       gain += target - bal; bal = target; manualCum += a;
+      if (e.value != null) appraisal = e.value;
     }
     if (!last || e.date > last) last = e.date;
   }
@@ -368,7 +373,8 @@ export function fundStats(inv, asOf = todayStr(), entries = null) {
   if (units && switched) {
     price = priceAt(inv, asOf, entries);
     balance = price ? qty * price.price : cost;
-  } else balance = bal;
+  } else if (isProperty(inv)) balance = appraisal ?? (contrib - withdraw);   // costos y arreglos no suben la tasación
+  else balance = bal;
   const totalGain = balance - invested + divPaid;
   return {
     contrib, withdraw, gain, invested, balance, last, divPaid, divReinv, div12, totalGain,
@@ -401,7 +407,7 @@ export function annualReturn(inv, asOf = todayStr()) {
 }
 
 export function investmentSummaries({ archived = false } = {}) {
-  return db.all('investments').filter(i => !isPoints(i) && (archived || !i.archived)).map(i => {
+  return db.all('investments').filter(i => !isPoints(i) && !isProperty(i) && (archived || !i.archived)).map(i => {
     const st = fundStats(i);
     return { ...i, ...st, id: i.id };
   }).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
@@ -414,7 +420,7 @@ export function gainBreakdown({ closed = true } = {}) {
   const today = todayStr();
   const out = [];
   for (const i of db.all('investments')) {
-    if (isPoints(i) || (!closed && i.archived) || currencyInfo(i.currency).convertible === false) continue;
+    if (isPoints(i) || isProperty(i) || (!closed && i.archived) || currencyInfo(i.currency).convertible === false) continue;
     const st = fundStats(i);
     if (!st.contrib && !st.gain && !st.divPaid) continue;
     const r = rateFor(i.currency, today) ?? 1;
@@ -439,12 +445,73 @@ export function pointsSummaries() {
 
 export function debtSummaries() {
   const entries = db.all('debtEntries');
+  const today = todayStr();
   return db.all('debts').filter(d => !d.archived).map(d => {
     let balance = 0, last = null;
     for (const e of entries) if (e.debtId === d.id) { balance += e.amount; if (!last || e.date > last) last = e.date; }
+    if (d.mortgage) { balance = debtBalanceAt(d, today); const k = cuotasPaid(d, today); return { ...d, balance, last, cuota: k, cuotas: d.mortgage.rows.length }; }
     return { ...d, balance, last };
   });
 }
+
+// Crédito hipotecario: `mortgage = { from, first, rows }`. from = desembolso; first = vencimiento de la cuota 1;
+// rows = tabla de desarrollo del banco [n, amortización, interés, dividendo neto, seguro incendio, desgravamen,
+// dividendo total, saldo] (UF). El saldo baja solo con cada cuota vencida.
+export function cuotasPaid(d, date) {
+  const m = d.mortgage;
+  if (!m || date < m.first) return 0;
+  const [fy, fm] = m.first.slice(0, 7).split('-').map(Number), [y, mo] = date.slice(0, 7).split('-').map(Number);
+  const k = (y * 12 + mo) - (fy * 12 + fm) + (Number(date.slice(8)) >= Number(m.first.slice(8)) ? 1 : 0);
+  return Math.max(0, Math.min(m.rows.length, k));
+}
+export function debtBalanceAt(d, date, entries = null) {
+  if (d.mortgage) {
+    if (date < d.mortgage.from) return 0;
+    const k = cuotasPaid(d, date);
+    return k ? d.mortgage.rows[k - 1][7] : d.mortgage.principal;
+  }
+  return (entries || db.all('debtEntries')).filter(e => e.debtId === d.id && e.date <= date).reduce((a, e) => a + e.amount, 0);
+}
+// Tabla de un crédito nuevo con tasa fija (sistema francés, como el banco): tasa mensual (1+anual)^(1/12)−1.
+export function mortgageSchedule({ principal, annualRate, months, insurance = 0 }) {
+  const r = Math.pow(1 + annualRate, 1 / 12) - 1;
+  const pay = principal * r / (1 - Math.pow(1 + r, -months));
+  const rows = [];
+  let bal = principal;
+  for (let n = 1; n <= months; n++) {
+    const int = bal * r, am = pay - int;
+    bal = Math.max(0, bal - am);
+    const R = (x) => Math.round(x * 1e4) / 1e4;
+    rows.push([n, R(am), R(int), R(pay), R(insurance), 0, R(pay + insurance), R(bal)]);
+  }
+  return rows;
+}
+// Del dividendo, qué parte es amortización (ahorro: baja la deuda); el resto (interés y seguros) es gasto.
+// La cuota sale del número en la descripción ("60.0") o, si no, de la fecha.
+export function amortShare(tx, cat) {
+  const d = cat && cat.debtId ? db.get('debts', cat.debtId) : null;
+  if (!d || !d.mortgage) return 0;
+  const byDate = Math.max(1, cuotasPaid(d, addDays(tx.date, 5)));
+  const n = parseFloat(String(tx.desc || '').replace(',', '.'));
+  const k = Number.isInteger(n) && n >= 1 && Math.abs(n - byDate) <= 3 ? n : byDate;
+  const row = d.mortgage.rows[k - 1];
+  return row && row[6] ? row[1] / row[6] : 0;
+}
+export const expenseFactor = (tx, cat) => (cat && cat.debtId ? 1 - amortShare(tx, cat) : 1);
+
+// Propiedades: valor (última tasación, en su moneda), costo total (precio + costos de compra + arreglos),
+// crédito asociado y la parte de un socio en la plusvalía (ej. quien aportó a la remodelación).
+export function propertyStats(p, asOf = todayStr()) {
+  const st = fundStats(p, asOf);
+  const debt = p.mortgageId ? db.get('debts', p.mortgageId) : null;
+  const r = rateFor(p.currency, asOf) ?? 1;
+  const debtCur = debt ? debtBalanceAt(debt, asOf) * ((rateFor(debt.currency, asOf) ?? 1) / r) : 0;
+  const value = st.balance, basis = st.invested;
+  const share = p.partner && p.partner.contrib && basis ? p.partner.contrib / basis : 0;
+  const partnerClaim = share * Math.max(0, value - basis);
+  return { value, basis, gain: value - basis, debt: debtCur, share, partnerClaim, equity: value - debtCur - partnerClaim, mortgage: debt, last: st.last };
+}
+export const propertySummaries = () => db.all('investments').filter(i => isProperty(i) && !i.archived).map(p => ({ ...p, ...propertyStats(p) }));
 
 // ---- Reparto de gastos compartidos --------------------------------------
 
@@ -578,7 +645,7 @@ export function spendingByCategory(ym, mode = 'total', pid = null) {
     const cat = category(tx.categoryId);
     if (!cat || cat.kind !== 'expense') continue;
     const sign = tx.kind === 'in' ? -1 : 1;
-    let b = txBase(tx) * sign;
+    let b = txBase(tx) * sign * expenseFactor(tx, cat);
     if (mode === 'mine') {
       const sh = shares(tx, cat, pct, ps);
       if (sh) b *= (sh[me] || 0);
@@ -592,13 +659,13 @@ export function spendingByCategory(ym, mode = 'total', pid = null) {
 }
 
 // Ingresos del mes; con pid, solo los que recibió esa persona (para "Mi parte").
-export function incomeOfMonth(ym, pid = null) {
+export function incomeOfMonth(ym, pid = null, { extraordinary = true } = {}) {
   let t = 0;
   for (const tx of txsInMonth(ym)) {
     if (tx.kind !== 'in') continue;
     if (pid && tx.paidBy !== pid) continue;
     const cat = category(tx.categoryId);
-    if (cat && cat.kind === 'income') t += txBase(tx);
+    if (cat && cat.kind === 'income' && (extraordinary || !cat.extraordinary)) t += txBase(tx);
   }
   return t;
 }
@@ -617,7 +684,7 @@ export function dailySpend(ym, mode = 'total', pid = null) {
     if (tx.kind !== 'out' && tx.kind !== 'in') continue;
     const cat = category(tx.categoryId);
     if (!cat || cat.kind !== 'expense') continue;
-    let b = txBase(tx) * (tx.kind === 'in' ? -1 : 1);
+    let b = txBase(tx) * (tx.kind === 'in' ? -1 : 1) * expenseFactor(tx, cat);
     if (mode === 'mine') {
       const sh = shares(tx, cat, pct, ps);
       if (sh) b *= (sh[me] || 0);
@@ -654,7 +721,7 @@ export function entryCounts(from, to) {
 export function netWorthHistory(months) {
   const cur = curYm();
   const end = (ym) => (ym === cur ? todayStr() : monthEnd(ym));
-  const out = months.map(ym => ({ ym, cash: 0, cards: 0, inv: 0, debts: 0, total: 0 }));
+  const out = months.map(ym => ({ ym, cash: 0, cards: 0, inv: 0, debts: 0, props: 0, total: 0 }));
   for (const a of db.all('accounts')) {
     if (a.excludeNW || currencyInfo(a.currency).convertible === false) continue;
     const rows = accountLedger(a.id);
@@ -672,11 +739,18 @@ export function netWorthHistory(months) {
     if (d.excludeNW || currencyInfo(d.currency).convertible === false) continue;
     const es = entries.filter(e => e.debtId === d.id);
     months.forEach((ym, k) => {
-      const bal = es.filter(e => e.date <= end(ym)).reduce((a, e) => a + e.amount, 0);
+      const bal = debtBalanceAt(d, end(ym), es);
       if (bal) out[k].debts += (d.direction === 'owe' ? -1 : 1) * bal * (rateFor(d.currency, end(ym)) ?? 1);
     });
   }
-  for (const p of out) p.total = p.cash + p.cards + p.inv + p.debts;
+  for (const p of db.all('investments').filter(isProperty)) {
+    months.forEach((ym, k) => {
+      if (end(ym) < (investmentEntries(p.id)[0] || {}).date) return;
+      const s = propertyStats(p, end(ym));
+      out[k].props += (s.value - s.partnerClaim) * (rateFor(p.currency, end(ym)) ?? 1);
+    });
+  }
+  for (const p of out) p.total = p.cash + p.cards + p.inv + p.debts + p.props;
   return out;
 }
 
@@ -1165,7 +1239,7 @@ export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 
     if (!cat || cat.kind !== kind) continue;
     if (kind === 'income' && tx.kind !== 'in') continue;
     // en gastos, una devolución (ingreso en una categoría de gasto) resta
-    let v = txBase(tx) * (kind === 'expense' && tx.kind === 'in' ? -1 : 1);
+    let v = txBase(tx) * (kind === 'expense' && tx.kind === 'in' ? -1 : 1) * (kind === 'expense' ? expenseFactor(tx, cat) : 1);
     if (mode === 'mine') {
       if (kind === 'income') { if (tx.paidBy !== me) continue; } else {
         const sh = shares(tx, cat, pctOf(months[i]), ps);
@@ -1207,7 +1281,7 @@ export function portfolioHistory(months) {
   const out = months.map(ym => ({ ym, value: 0, invested: 0 }));
   const cur = curYm();
   for (const f of db.all('investments')) {
-    if (isPoints(f) || currencyInfo(f.currency).convertible === false) continue;
+    if (isPoints(f) || isProperty(f) || currencyInfo(f.currency).convertible === false) continue;
     const h = fundHistory(f.id, months);
     h.forEach((p, k) => {
       if (!p.value && !p.invested) return;
@@ -1222,7 +1296,7 @@ export function portfolioHistory(months) {
 // Primer mes con registros de inversión (o de un fondo).
 export function firstInvestmentMonth(invId = null) {
   let first = null;
-  const skip = new Set(invId ? [] : db.all('investments').filter(isPoints).map(i => i.id));
+  const skip = new Set(invId ? [] : db.all('investments').filter(i => isPoints(i) || isProperty(i)).map(i => i.id));
   for (const e of db.all('invEntries')) if ((invId ? e.invId === invId : !skip.has(e.invId)) && (!first || e.date < first)) first = e.date;
   const linked = invId ? [invId] : [...new Set(db.all('categories').filter(c => c.invId).map(c => c.invId))].filter(id => !skip.has(id));
   for (const id of linked) for (const e of linkedEntries(id)) if (!first || e.date < first) first = e.date;

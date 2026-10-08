@@ -106,7 +106,7 @@ export function renderTxs(root, sub) {
     for (const tx of txs) {
       const cat = M.category(tx.categoryId);
       if (!cat) continue;
-      if (cat.kind === 'expense') sumOut += (tx.kind === 'in' ? -1 : 1) * M.txBase(tx);
+      if (cat.kind === 'expense') sumOut += (tx.kind === 'in' ? -1 : 1) * M.txBase(tx) * M.expenseFactor(tx, cat);
       else if (cat.kind === 'income' && tx.kind === 'in') sumIn += M.txBase(tx);
     }
     const shown = q ? txs.slice(0, 300) : txs;

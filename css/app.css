@@ -422,3 +422,8 @@ select:disabled { opacity: .65; }
 .div-bar { position: absolute; top: 0; height: 100%; border-radius: 3px; }
 .div-val { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 .paste-btn { margin-left: auto; }
+
+/* ---- Propiedades ------------------------------------------------------------------- */
+.rent { display: grid; gap: 4px; }
+.rent-line { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.rent-line.strong { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 2px; font-size: 15px; }

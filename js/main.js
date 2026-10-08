@@ -10,6 +10,7 @@ import { renderReports } from './views/reports.js';
 import { openTxForm } from './views/add.js';
 import { editFund } from './views/invest.js';
 import { editProgram } from './views/points.js';
+import { editProperty } from './views/properties.js';
 
 const app = document.getElementById('app');
 const TABS = [
@@ -34,6 +35,7 @@ function fabAction() {
   const { tab, sub } = parseHash();
   if (tab === 'mas' && sub === 'inversiones') return { label: 'Nueva inversión', run: () => editFund(null) };
   if (tab === 'mas' && sub === 'puntos') return { label: 'Nuevo programa de puntos', run: () => editProgram(null) };
+  if (tab === 'mas' && sub === 'propiedades') return { label: 'Nueva propiedad', run: () => editProperty(null) };
   const acc = tab === 'movs' && sub ? M.account(sub) : null;
   return { label: 'Nuevo movimiento', run: () => openTxForm(null, acc && !acc.archived ? { accountId: acc.id, lockAccount: true } : {}) };
 }

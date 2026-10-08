@@ -7,6 +7,7 @@ import { openSplitEditor } from './close.js';
 import { categoryPicker } from './add.js';
 import { renderInvest } from './invest.js';
 import { renderPoints } from './points.js';
+import { renderProperties } from './properties.js';
 import { renderDebts } from './debts.js';
 import { openAccount } from './account.js';
 
@@ -24,7 +25,7 @@ const back = (to = '#/mas') => h('a', { class: 'backlink', href: to }, '‹ Más
 // inversiones a las que se puede asociar una categoría (las por valor; puntos y millas no)
 function invOptions(c) {
   return db.all('investments').filter(i => !M.isPoints(i) && (!i.archived || i.id === (c && c.invId)))
-    .sort((a, b) => a.name.localeCompare(b.name)).map(i => ({ v: i.id, l: `${i.name} (${i.currency})` }));
+    .sort((a, b) => a.name.localeCompare(b.name)).map(i => ({ v: i.id, l: `${M.isProperty(i) ? '🏠 ' : ''}${i.name} (${i.currency})` }));
 }
 
 // Tras asociar una categoría a una inversión: evitar contar dos veces los aportes ya ingresados a mano y
@@ -93,6 +94,9 @@ export function editCategory(c) {
           } };
         },
       },
+      { key: 'debtId', label: 'Es el dividendo del crédito', type: 'select', show: (v) => v.kind === 'expense', options: [{ v: '', l: '— no —' }, ...db.all('debts').filter(d => d.mortgage).map(d => ({ v: d.id, l: d.name }))],
+        hint: 'Del dividendo, la amortización baja la deuda (es ahorro); solo el interés y los seguros cuentan como gasto.' },
+      { key: 'extraordinary', label: 'Ingreso extraordinario (herencias, regalos, ventas puntuales)', type: 'check', show: (v) => v.kind === 'income', hint: 'Se muestra aparte de los ingresos recurrentes.' },
       { key: 'invId', label: 'Sumar como aporte a la inversión', type: 'select', options: [{ v: '', l: '— ninguna —' }, ...invOptions(c)],
         hint: 'Cada gasto de esta categoría (pasado y futuro) cuenta como aporte a esa inversión, y cada ingreso como retiro. Ej: la categoría AFP y tu inversión AFP.' },
       { key: 'invFrom', label: 'Contar desde (opcional)', type: 'date', show: (v) => !!v.invId, hint: 'Vacío: todo el historial de la categoría.' },
@@ -102,6 +106,8 @@ export function editCategory(c) {
       if (v.splitMode !== 'fixed') delete v.fixedPct;
       else if (!v.fixedPct || !Object.values(v.fixedPct).some(x => x > 0)) { toast('Indica los porcentajes fijos'); return false; }
       if (!v.invId) { delete v.invId; delete v.invFrom; } else if (!v.invFrom) delete v.invFrom;
+      if (!v.debtId || v.kind !== 'expense') delete v.debtId;
+      if (!v.extraordinary || v.kind !== 'income') delete v.extraordinary;
       const saved = await db.put('categories', v);
       if (v.invId && (v.invId !== (c && c.invId) || v.invFrom !== (c && c.invFrom))) await afterLink(saved);
       else toast('Categoría guardada');
@@ -442,6 +448,7 @@ function applePayHelp() {
 export function renderMore(root, sub) {
   const subs = { categorias: renderCategories, cuentas: renderAccounts, personas: renderPeople, reparto: renderSplits, monedas: renderCurrencies, respaldo: renderBackup };
   if (sub === 'inversiones') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
+  if (sub === 'propiedades') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Propiedades'), inner); renderProperties(inner); return () => renderProperties(inner); }
   if (sub === 'puntos') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Puntos y millas'), inner); renderPoints(inner); return () => renderPoints(inner); }
   if (sub === 'deudas') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
   if (subs[sub]) { const r = subs[sub](root); return typeof r === 'function' ? r : () => subs[sub](root); }
@@ -449,6 +456,7 @@ export function renderMore(root, sub) {
   fill(root, 
     h('section', { class: 'card' },
       item('inversiones', '📈', 'Inversiones', 'Fondos, acciones, ETF, AFP, APV: valor, precios y dividendos'),
+      item('propiedades', '🏠', 'Propiedades', 'Valor, crédito hipotecario, plusvalía y arriendo'),
       item('puntos', '🎁', 'Puntos y millas', 'Dólares-Premio, LATAM Pass y otros programas'),
       item('deudas', '🤝', 'Deudas', 'Lo que debes o te deben, en cualquier moneda')),
     h('section', { class: 'card' },
