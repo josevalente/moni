@@ -1,0 +1,42 @@
+# Precios de la Bolsa de Santiago para la app (sin servidor ni claves): dos veces por día hábil se
+# consultan y se publican en la rama "precios" (santiago.json). La app los lee desde raw.githubusercontent.com.
+name: Precios Bolsa de Santiago
+
+on:
+  schedule:
+    - cron: '30 16 * * 1-5'    # mediodía en Chile
+    - cron: '20 21 * * 1-5'    # después del cierre
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/precios.yml', '.github/precios/**']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: precios
+
+jobs:
+  precios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Precios anteriores (por si alguna acción no responde)
+        run: |
+          if git fetch -q origin precios; then git show FETCH_HEAD:santiago.json > /tmp/prev.json; else echo '{}' > /tmp/prev.json; fi
+      - name: Consultar precios
+        run: node .github/precios/santiago.mjs /tmp/prev.json /tmp/santiago.json
+      - name: Publicar en la rama precios
+        run: |
+          mkdir /tmp/out && cd /tmp/out
+          git init -q -b precios
+          cp /tmp/santiago.json .
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add santiago.json
+          git commit -q -m "Precios $(date -u +%F)"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" precios

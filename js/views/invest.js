@@ -137,7 +137,7 @@ function tradeForm(inv, kind, e = null) {
 
 async function priceAction(inv) {
   if (inv.priceSource && inv.priceSource !== 'manual') {
-    if (inv.priceSource === 'twelve' && !PX.getKey()) { askKey(); return; }
+    if (PX.sourceOf(inv) === 'twelve' && !PX.getKey()) { askKey(); return; }
     toast('Consultando precio…');
     const r = await PX.refreshPrices({ only: inv.id });
     toast(r.errors.length ? `${inv.name}: ${r.errors[0].message}` : 'Precio actualizado', { ms: 5000 });
@@ -250,12 +250,15 @@ function symbolField(state) {
           const list = await PX.searchSymbols(input.value, src);
           fill(results, list.length ? list.slice(0, 8).map(r => h('button', { type: 'button', class: 'row sym-row', onclick: () => {
             input.value = r.symbol; state.mic = r.mic || null; state.picked = r;
+            const srcSel = input.closest('form').querySelector('select[data-key="priceSource"]');
+            if (srcSel && r.source && srcSel.value !== 'coingecko') { srcSel.value = r.source; srcSel.dispatchEvent(new Event('change', { bubbles: true })); }
             const curSel = input.closest('form').querySelector('select[data-key="currency"]');
             if (curSel && [...curSel.options].some(o => o.value === r.currency)) curSel.value = r.currency;
             fill(results, h('p', { class: 'muted small' }, `${r.name} · ${r.exchange} · ${r.currency}`));
           } }, h('div', { class: 'main' }, h('div', { class: 'title' }, `${r.symbol} · ${r.name}`),
             h('div', { class: 'sub' }, `${r.exchange}${r.type ? ' · ' + r.type : ''} · ${r.currency}`),
-            r.adr ? h('div', { class: 'sub ok-note' }, 'Versión en EE.UU. (ADR, la que se compra en Zesty) · precio gratis · revisa que sea la misma empresa') : null,
+            r.source === 'santiago' ? h('div', { class: 'sub ok-note' }, 'Precio diario de la Bolsa de Santiago, sin clave') : null,
+            r.adr ? h('div', { class: 'sub ok-note' }, 'Versión en EE.UU. (ADR) · precio gratis · revisa que sea la misma empresa') : null,
             !r.free ? h('div', { class: 'sub warn-note' }, 'Esta bolsa no está en el plan gratis: usa precio manual') : null))) : h('p', { class: 'muted small' }, 'Sin resultados.'));
         } catch (e) { fill(results, h('p', { class: 'muted small' }, 'No se pudo buscar: ' + e.message)); }
       };
@@ -291,7 +294,8 @@ function editFund(f) {
       delete v._qty; delete v._price;
       if (v.type === 'units') {
         if (v.priceSource !== 'manual' && !v.symbol) { toast('Falta el símbolo (o elige precio manual)'); return false; }
-        v.mic = v.priceSource === 'twelve' ? (state.mic || (f && f.symbol === v.symbol ? f.mic : null) || undefined) : undefined;
+        v.mic = v.priceSource === 'santiago' ? 'XSGO'
+          : v.priceSource === 'twelve' ? ((state.mic !== 'XSGO' && state.mic) || (f && f.symbol === v.symbol && f.mic !== 'XSGO' ? f.mic : null) || undefined) : undefined;
         if (converting(v)) {
           if (!Number.isFinite(qty) || qty <= 0) { toast('Indica cuántas tienes hoy'); return false; }
           v.unitsFrom = M.todayStr(); v.unitsStart = qty;
@@ -301,7 +305,7 @@ function editFund(f) {
       const saved = await db.put('investments', v);
       if (v.type === 'units' && converting(v) && price) await PX.setManualPrice(saved, M.todayStr(), Math.abs(price));
       if (v.type === 'units' && v.priceSource !== 'manual') {
-        if (v.priceSource === 'twelve' && !PX.getKey()) { askKey(); return; }
+        if (PX.sourceOf(v) === 'twelve' && !PX.getKey()) { askKey(); return; }
         PX.refreshPrices({ only: saved.id }).then(r => {
           if (!r.errors.length) return;
           const err = r.errors[0];
@@ -384,7 +388,7 @@ function openDetail(id) {
         divTotal ? kpi('Dividendos (12 meses)', `${M.fmt(s.div12, cur)}${s.balance ? ` · ${pct(s.div12 / s.balance)}` : ''}`) : null,
         kpi('Rentabilidad total', `${M.fmt(s.totalGain, cur, { sign: true })} (${pct(s.contrib ? s.ret : null)})`),
         kpi('Rentabilidad anual', pct(annual))),
-      units && inv.symbol ? h('p', { class: 'muted small' }, `${inv.symbol}${inv.mic ? ' · ' + inv.mic : ''} · precio ${inv.priceSource === 'manual' ? 'manual' : 'automático'}${s.price && s.price.trade ? ' (de la última compra/venta)' : ''}`) : null,
+      units && inv.symbol ? h('p', { class: 'muted small' }, `${inv.symbol} · precio ${({ santiago: 'diario de la Bolsa de Santiago', twelve: 'automático (Twelve Data)', coingecko: 'automático (CoinGecko)', manual: 'manual' })[PX.sourceOf(inv)] || 'manual'}${s.price && s.price.trade ? ' (de la última compra/venta)' : ''}`) : null,
       h('div', { class: 'actions' }, units ? [
         h('button', { class: 'btn primary', onclick: () => tradeForm(inv, 'contrib') }, 'Compra'),
         h('button', { class: 'btn', onclick: () => tradeForm(inv, 'withdraw') }, 'Venta'),
