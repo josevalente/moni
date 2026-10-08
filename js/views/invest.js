@@ -15,6 +15,14 @@ const TYPES = [{ v: 'fund', l: 'Por valor: actualizo el saldo total' }, { v: 'un
 const ASSETS = [{ v: 'stock', l: 'Acciones' }, { v: 'etf', l: 'ETF' }, { v: 'ffmm', l: 'Fondo mutuo' }, { v: 'crypto', l: 'Cripto' }, { v: 'other', l: 'Otro' }];
 const UNIT_WORD = { stock: 'acciones', etf: 'cuotas', ffmm: 'cuotas', crypto: 'unidades', other: 'unidades' };
 const unitWord = (inv) => UNIT_WORD[inv.assetKind] || 'unidades';
+const UNIT_ONE = { stock: 'acción', etf: 'cuota', ffmm: 'cuota', crypto: 'unidad', other: 'unidad' };
+const unitOne = (inv) => UNIT_ONE[inv.assetKind] || 'unidad';
+// precio por unidad: con 2 decimales más que la moneda ($78,31 por acción; un promedio no es entero)
+export function fmtPrice(v, cur) {
+  const c = M.currencyInfo(cur);
+  const s = new Intl.NumberFormat('es-CL', { minimumFractionDigits: c.decimals, maximumFractionDigits: c.decimals + 2 }).format(Math.abs(v || 0));
+  return `${v < 0 ? '-' : ''}${c.symbol === '$' ? '$' : c.symbol + ' '}${s}`;
+}
 
 const kindLabel = (inv, e) => (e.kind === 'dividend' ? 'Dividendo' : e.kind === 'gain' ? 'Valorización'
   : M.isUnits(inv) && e.units ? (e.kind === 'contrib' ? 'Compra' : 'Venta') : (e.kind === 'contrib' ? 'Aporte' : 'Retiro'));
@@ -96,43 +104,80 @@ async function removeEntry(e) {
 
 // ---- por cantidad: compra, venta, precio -------------------------------------------------
 
+// Compra o venta: se ingresa el precio por unidad (+ comisión) o el monto total de la operación, como lo
+// muestra la corredora (Zesty muestra el total); con el total se calcula el precio promedio por unidad.
+const TRADE_MODE = 'moni.tradeMode';
 function tradeForm(inv, kind, e = null) {
   const buy = kind === 'contrib';
   const st = M.fundStats(inv);
   const held = st.qty + (e && !buy ? e.units : 0);
   const word = unitWord(inv);
+  const one = unitOne(inv);
+  let lastMode = 'total';
+  try { lastMode = localStorage.getItem(TRADE_MODE) || 'total'; } catch { /* ignore */ }
+  const mode0 = e ? (e.byTotal ? 'total' : 'price') : lastMode;
+  const value = e
+    ? { ...e, mode: mode0, total: e.amount, accountId: e.txId && db.get('tx', e.txId) ? db.get('tx', e.txId).accountId : '' }
+    : { date: M.todayStr(), accountId: '', mode: mode0, price: st.price ? st.price.price : null };
+  const byTotal = (v) => v.mode === 'total';
   const fm = formModal({
     title: `${buy ? 'Compra' : 'Venta'} · ${inv.name}`,
-    value: e ? { ...e, accountId: e.txId && db.get('tx', e.txId) ? db.get('tx', e.txId).accountId : '' } : { date: M.todayStr(), accountId: '', price: st.price ? st.price.price : null },
+    value,
     fields: [
       { key: 'units', label: `Cantidad (${word})`, type: 'number', required: true, hint: buy ? 'Acepta decimales (acciones fraccionadas).' : `Tienes ${fmtQty(held)} ${word}.` },
-      { key: 'price', label: `Precio por unidad (${inv.currency})`, type: 'number', required: true },
-      { key: 'fee', label: `Comisión (${inv.currency}, opcional)`, type: 'number' },
+      { key: 'mode', label: 'Cómo ingresas el valor', type: 'select', options: [
+        { v: 'total', l: buy ? 'Monto total pagado' : 'Monto total recibido' },
+        { v: 'price', l: `Precio por ${one} y comisión` }] },
+      { key: 'total', label: `${buy ? 'Total pagado' : 'Total recibido'} (${inv.currency})`, type: 'number', required: true, show: byTotal,
+        hint: buy ? `Todo lo que pagaste, con comisiones: el precio promedio por ${one} se calcula solo.` : 'Lo que recibiste, ya descontadas las comisiones.' },
+      { key: 'price', label: `Precio por ${one} (${inv.currency})`, type: 'number', required: true, show: (v) => !byTotal(v) },
+      { key: 'fee', label: `Comisión (${inv.currency}, opcional)`, type: 'number', show: (v) => !byTotal(v) },
       { key: 'date', label: 'Fecha', type: 'date', required: true },
       { key: 'accountId', label: buy ? 'Pagado desde la cuenta (opcional)' : 'Depositado en la cuenta (opcional)', type: 'select', options: accountOptions(inv, !buy) },
       { key: 'note', label: 'Nota', type: 'text' },
     ],
-    extra: h('p', { class: 'muted small trade-total' }),
+    extra: h('p', { class: 'trade-total', 'aria-live': 'polite' }),
     onSave: async (v) => {
-      const units = Math.abs(v.units), price = Math.abs(v.price), fee = Math.abs(v.fee || 0);
-      if (!units || !price) { toast('Ingresa cantidad y precio'); return false; }
+      const units = Math.abs(v.units || 0);
+      if (!units) { toast('Ingresa la cantidad'); return false; }
       if (!buy && units > held + 1e-9) { toast(`Solo tienes ${fmtQty(held)} ${word}`); return false; }
-      const amount = buy ? units * price + fee : units * price - fee;
+      let amount, price, fee;
+      if (byTotal(v)) {
+        amount = Math.abs(v.total || 0);
+        if (!amount) { toast(buy ? 'Ingresa el total pagado' : 'Ingresa el total recibido'); return false; }
+        price = amount / units; fee = 0;
+      } else {
+        price = Math.abs(v.price || 0); fee = Math.abs(v.fee || 0);
+        if (!price) { toast(`Ingresa el precio por ${one}`); return false; }
+        amount = buy ? units * price + fee : units * price - fee;
+      }
+      try { localStorage.setItem(TRADE_MODE, v.mode); } catch { /* ignore */ }
       const txId = await accountTx(inv, { accountId: v.accountId, date: v.date, kind: buy ? 'out' : 'in', amount, desc: `${buy ? 'Compra' : 'Venta'} ${fmtQty(units)} ${inv.symbol || inv.name}`, categoryId: categoryIdOf('invest'), prevTxId: e && e.txId });
-      await db.put('invEntries', { ...(e || {}), invId: inv.id, date: v.date, kind, units, price, fee: fee || undefined, amount, note: v.note || '', txId: txId || undefined });
-      toast(`${buy ? 'Compra' : 'Venta'} registrada: ${fmtQty(units)} ${word} · ${M.fmt(amount, inv.currency)}`);
+      const rec = { ...(e || {}), invId: inv.id, date: v.date, kind, units, price, fee: fee || undefined, amount, byTotal: byTotal(v) || undefined, note: v.note || '', txId: txId || undefined };
+      delete rec.mode; delete rec.total;
+      await db.put('invEntries', rec);
+      toast(`${buy ? 'Compra' : 'Venta'} registrada: ${fmtQty(units)} ${word} a ${fmtPrice(price, inv.currency)} promedio · total ${M.fmt(amount, inv.currency)}`, { ms: 6000 });
     },
     onDelete: e ? () => removeEntry(e) : null,
   });
-  // total en vivo
+  // cálculo en vivo: precio promedio (con el total) o total (con el precio)
   const form = fm.sheet.querySelector('form');
-  const total = fm.sheet.querySelector('.trade-total');
-  const inputs = form.querySelectorAll('input[inputmode=decimal]');
+  const out = fm.sheet.querySelector('.trade-total');
+  const field = (label) => [...form.querySelectorAll('label.field')].find(l => (l.querySelector('span') || {}).textContent.startsWith(label));
+  const num = (label) => { const f = field(label); return f ? parseNum(f.querySelector('input').value) : NaN; };
+  const sel = field('Cómo ingresas').querySelector('select');
   const upd = () => {
-    const [u, p, f] = [...inputs].slice(0, 3).map(i => parseNum(i.value));
-    total.textContent = Number.isFinite(u) && Number.isFinite(p) ? `Total ${M.fmt(buy ? u * p + (Number.isFinite(f) ? f : 0) : u * p - (Number.isFinite(f) ? f : 0), inv.currency)}` : '';
+    const u = num('Cantidad');
+    if (sel.value === 'total') {
+      const t = num(buy ? 'Total pagado' : 'Total recibido');
+      out.textContent = Number.isFinite(u) && u > 0 && Number.isFinite(t) && t > 0 ? `Precio promedio: ${fmtPrice(t / u, inv.currency)} por ${one}` : '';
+    } else {
+      const p = num(`Precio por ${one}`), f = num('Comisión');
+      const fee = Number.isFinite(f) ? f : 0;
+      out.textContent = Number.isFinite(u) && Number.isFinite(p) ? `Total ${M.fmt(buy ? u * p + fee : u * p - fee, inv.currency)}` : '';
+    }
   };
-  form.addEventListener('input', upd); upd();
+  form.addEventListener('input', upd); form.addEventListener('change', upd); upd();
 }
 
 async function priceAction(inv) {
@@ -374,8 +419,8 @@ function openDetail(id) {
     const kpis = units ? [
       kpi('Valor actual', M.fmt(s.balance, cur)),
       kpi(`Cantidad`, `${fmtQty(s.qty)} ${unitWord(inv)}`),
-      kpi('Precio', s.price ? `${M.fmt(s.price.price, cur)} · ${dShort(s.price.date)}` : '—'),
-      kpi('Costo promedio', s.qty ? M.fmt(s.avgCost, cur) : '—'),
+      kpi('Precio', s.price ? `${fmtPrice(s.price.price, cur)} · ${dShort(s.price.date)}` : '—'),
+      kpi(`Costo promedio por ${unitOne(inv)}`, s.qty ? fmtPrice(s.avgCost, cur) : '—'),
       kpi('Ganancia no realizada', `${M.fmt(s.unrealized, cur, { sign: true })} (${pct(s.cost ? s.unrealized / s.cost : null)})`),
       s.realized ? kpi('Ganancia realizada', M.fmt(s.realized, cur, { sign: true })) : null,
     ] : [
@@ -404,7 +449,7 @@ function openDetail(id) {
       h('h4', null, 'Historial'),
       entries.map(e => {
         const amt = e.kind === 'withdraw' ? -e.amount : e.amount;
-        const what = e.units ? `${fmtQty(e.units)} × ${M.fmt(e.price, cur)}` : null;
+        const what = e.units ? `${fmtQty(e.units)} × ${fmtPrice(e.price, cur)}${e.byTotal ? ' (promedio)' : ''}` : null;
         const extra = e.kind === 'dividend' ? (e.reinvested ? 'reinvertido' : e.txId && db.get('tx', e.txId) ? `a ${(M.account(db.get('tx', e.txId).accountId) || {}).name || 'cuenta'}` : 'pagado') : null;
         return h('button', { class: 'row', onclick: () => editEntry(inv, e) },
           h('div', { class: 'main' }, h('div', { class: 'title' }, kindLabel(inv, e)), h('div', { class: 'sub' }, [dShort(e.date), what, extra, e.note].filter(Boolean).join(' · '))),
@@ -430,7 +475,7 @@ export function renderInvest(root) {
   const cur = M.curYm();
   const last24 = M.monthsBetween(M.addMonths(cur, -23), cur);
   const rowSub = (f) => M.isUnits(f)
-    ? `${fmtQty(f.qty)} ${unitWord(f)}${f.symbol ? ' · ' + f.symbol : ''}${f.price ? ' · ' + M.fmt(f.price.price, f.currency) : ''} · ${pct(f.contrib ? f.ret : null)}`
+    ? `${fmtQty(f.qty)} ${unitWord(f)}${f.symbol ? ' · ' + f.symbol : ''}${f.price ? ' · ' + fmtPrice(f.price.price, f.currency) : ''} · ${pct(f.contrib ? f.ret : null)}`
     : `${f.currency} · rentab. ${f.contrib ? pct(f.ret) : '—'}${f.last ? ' · act. ' + dShort(f.last) : ''}`;
   const group = (hz, title) => {
     const list = funds.filter(f => (f.horizon || 'short') === hz);
