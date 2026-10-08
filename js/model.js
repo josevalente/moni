@@ -147,9 +147,8 @@ function buildRates() {
   for (const a of rateIdx.values()) a.sort((x, y) => x.date.localeCompare(y.date));
 }
 
-// Último valor conocido a la fecha (o el más antiguo si la fecha es anterior a todos).
-export function rateFor(cur, date) {
-  if (cur === base()) return 1;
+// Último registro de una serie (moneda o precio "px:<inversión>") a la fecha; null si no hay anterior.
+export function seriesAt(cur, date) {
   if (!rateIdx) buildRates();
   const arr = rateIdx.get(cur);
   if (!arr || !arr.length) return null;
@@ -159,8 +158,20 @@ export function rateFor(cur, date) {
     const mid = (lo + hi) >> 1;
     if (arr[mid].date <= date) { best = mid; lo = mid + 1; } else hi = mid - 1;
   }
-  return arr[best >= 0 ? best : 0].rate;
+  return best >= 0 ? arr[best] : null;
 }
+
+// Último valor conocido a la fecha (o el más antiguo si la fecha es anterior a todos).
+export function rateFor(cur, date) {
+  if (cur === base()) return 1;
+  if (!rateIdx) buildRates();
+  const arr = rateIdx.get(cur);
+  if (!arr || !arr.length) return null;
+  const r = seriesAt(cur, date);
+  return (r || arr[0]).rate;
+}
+// Fecha del último tipo de cambio guardado de una moneda.
+export const lastRateDate = (cur) => { if (!rateIdx) buildRates(); const a = rateIdx.get(cur); return a && a.length ? a[a.length - 1].date : null; };
 
 export const txFx = (tx) => (tx.fx != null ? tx.fx : (rateFor(tx.currency, tx.date) ?? 1));
 export const txBase = (tx) => tx.amount * txFx(tx);
@@ -231,25 +242,122 @@ export function netWorth() {
     if (r == null) missing.add(d.currency);
     debts += (d.direction === 'owe' ? -1 : 1) * d.balance * (r ?? 1);
   }
-  return { cash, cards, inv, debts, total: cash + cards + inv + debts, missing: [...missing] };
+  // puntos y millas: no suman, salvo los programas marcados "cuenta en mi patrimonio"
+  let points = 0;
+  for (const p of pointsSummaries()) if (p.inNetWorth && p.valueBase != null) points += p.valueBase;
+  return { cash, cards, inv, debts, points, total: cash + cards + inv + debts + points, missing: [...missing] };
 }
 
 // ---- Inversiones ---------------------------------------------------------
 
-export function investmentSummaries() {
-  const entries = db.all('invEntries');
-  return db.all('investments').filter(i => !i.archived).map(i => {
-    let contrib = 0, withdraw = 0, gain = 0, last = null;
-    for (const e of entries) {
-      if (e.invId !== i.id) continue;
-      if (e.kind === 'contrib') contrib += e.amount;
-      else if (e.kind === 'withdraw') withdraw += e.amount;
-      else gain += e.amount;
-      if (!last || e.date > last) last = e.date;
-    }
-    const balance = contrib - withdraw + gain;
-    const invested = contrib - withdraw;
-    return { ...i, contrib, withdraw, gain, balance, invested, last, ret: contrib ? gain / contrib : 0 };
+// Tipos: 'fund' (se registra su valor), 'units' (cantidad × precio: acciones, ETF, fondos mutuos,
+// cripto) y 'points' (puntos y millas: van en su propia sección y no son inversión).
+export const isPoints = (i) => i && i.type === 'points';
+export const isUnits = (i) => i && i.type === 'units';
+const POINTS_RE = /premio|pass\b|millas|miles|puntos|points|cmr|lanpass/i;
+export const looksLikePoints = (i) => !isPoints(i) && (currencyInfo(i.currency).convertible === false || POINTS_RE.test(i.name || ''));
+
+const entriesOf = (id) => db.all('invEntries').filter(e => e.invId === id).sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
+
+// Precio de una inversión por cantidad a una fecha: el último precio consultado o ingresado, o el de
+// la última compra/venta si es más reciente.
+export function priceAt(inv, date, entries = null) {
+  const r = seriesAt('px:' + inv.id, date);
+  let best = r ? { date: r.date, price: r.rate, manual: !!r.manual, at: r.updatedAt || 0 } : null;
+  for (const e of entries || entriesOf(inv.id)) {
+    if (e.date > date) break;
+    // el mismo día gana lo último que se registró (un precio ingresado después de la compra)
+    if (e.price && (!best || e.date > best.date || (e.date === best.date && (e.updatedAt || 0) > best.at))) best = { date: e.date, price: e.price, trade: true, at: e.updatedAt || 0 };
+  }
+  return best;
+}
+
+// Estado de una inversión a una fecha. Rentabilidad = valor − aportado neto + dividendos pagados.
+// En cantidad, el costo es promedio: una venta saca costo promedio × cantidad y el resto es ganancia realizada.
+export function fundStats(inv, asOf = todayStr(), entries = null) {
+  entries = entries || entriesOf(inv.id);
+  const units = isUnits(inv);
+  let contrib = 0, withdraw = 0, gain = 0, divPaid = 0, divReinv = 0, div12 = 0, qty = 0, cost = 0, realized = 0, last = null;
+  const cut12 = addDays(asOf, -365);
+  // una inversión que se llevaba por valor y pasó a cantidad: hasta esa fecha vale lo registrado;
+  // desde ahí, la cantidad inicial × precio (con ese valor como costo)
+  let switched = !units || !inv.unitsFrom;
+  const doSwitch = () => { qty = inv.unitsStart || 0; cost = contrib - withdraw + gain + divReinv; switched = true; };
+  for (const e of entries) {
+    if (e.date > asOf) break;
+    if (!switched && e.date >= inv.unitsFrom) doSwitch();
+    const a = Number(e.amount) || 0;
+    if (e.kind === 'contrib') {
+      contrib += a;
+      if (units && e.units) { qty += e.units; cost += a; }
+    } else if (e.kind === 'withdraw') {
+      withdraw += a;
+      if (units && e.units) {
+        const avg = qty > 0 ? cost / qty : 0;
+        const n = Math.min(e.units, qty);
+        realized += a - avg * n; cost -= avg * n; qty -= e.units;
+        if (qty < 1e-9) { qty = 0; cost = 0; }
+      }
+    } else if (e.kind === 'dividend') {
+      if (e.reinvested) { divReinv += a; if (units && e.units) { qty += e.units; cost += a; } } else divPaid += a;
+      if (e.date > cut12) div12 += a;
+    } else gain += a;
+    if (!last || e.date > last) last = e.date;
+  }
+  if (!switched && asOf >= inv.unitsFrom) doSwitch();
+  const invested = contrib - withdraw;
+  let balance, price = null;
+  if (units && switched) {
+    price = priceAt(inv, asOf, entries);
+    balance = price ? qty * price.price : cost;
+  } else balance = invested + gain + divReinv;
+  const totalGain = balance - invested + divPaid;
+  return {
+    contrib, withdraw, gain, invested, balance, last, divPaid, divReinv, div12, totalGain,
+    ret: contrib ? totalGain / contrib : 0,
+    qty, cost, avgCost: qty ? cost / qty : 0, unrealized: units ? balance - cost : 0, realized, price,
+    lastValue: units ? (price ? price.date : null) : (entries.filter(e => e.kind === 'gain').map(e => e.date).sort().at(-1) || null),
+  };
+}
+
+// Rentabilidad anual (tasa interna de retorno) de los flujos: aportes, retiros, dividendos pagados y el valor de hoy.
+export function annualReturn(inv, asOf = todayStr()) {
+  const entries = entriesOf(inv.id);
+  const flows = [];
+  for (const e of entries) {
+    if (e.date > asOf) break;
+    if (e.kind === 'contrib') flows.push([e.date, -e.amount]);
+    else if (e.kind === 'withdraw') flows.push([e.date, e.amount]);
+    else if (e.kind === 'dividend' && !e.reinvested) flows.push([e.date, e.amount]);
+  }
+  if (!flows.length) return null;
+  const st = fundStats(inv, asOf, entries);
+  flows.push([asOf, st.balance]);
+  const t0 = Date.parse(flows[0][0]);
+  if ((Date.parse(asOf) - t0) / 864e5 < 90) return null;            // muy poco tiempo: no se anualiza
+  const npv = (r) => flows.reduce((a, [d, v]) => a + v / Math.pow(1 + r, (Date.parse(d) - t0) / 864e5 / 365), 0);
+  let lo = -0.99, hi = 10;
+  if (npv(lo) * npv(hi) > 0) return null;
+  for (let k = 0; k < 100; k++) { const mid = (lo + hi) / 2; if (npv(lo) * npv(mid) <= 0) hi = mid; else lo = mid; }
+  return (lo + hi) / 2;
+}
+
+export function investmentSummaries({ archived = false } = {}) {
+  return db.all('investments').filter(i => !isPoints(i) && (archived || !i.archived)).map(i => {
+    const st = fundStats(i);
+    return { ...i, ...st, id: i.id };
+  }).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
+}
+
+// Puntos y millas: saldo en su unidad y, si se puede, su valor en moneda base.
+export function pointsSummaries() {
+  return db.all('investments').filter(i => isPoints(i) && !i.archived).map(i => {
+    const st = fundStats(i);
+    const info = currencyInfo(i.currency);
+    let valueBase = null;
+    if (i.pointValue) valueBase = st.balance * i.pointValue;
+    else if (info.convertible !== false) { const r = rateFor(i.currency, todayStr()); valueBase = r == null ? null : st.balance * r; }
+    return { ...i, ...st, id: i.id, valueBase };
   }).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
 }
 
@@ -611,10 +719,9 @@ export function pendingItems(ref = curYm(), { lastBackup = null, now = Date.now(
       if (tr.length) items.unshift({ type: 'close', key: 'close:' + prev, ym: prev, transfers: tr });
     }
   }
-  const lastGain = new Map();
-  for (const e of db.all('invEntries')) if (e.kind === 'gain' && (!lastGain.has(e.invId) || e.date > lastGain.get(e.invId))) lastGain.set(e.invId, e.date);
-  const stale = investmentSummaries().filter(f => Math.abs(f.balance) > 0 && lastGain.has(f.id))
-    .map(f => ({ id: f.id, name: f.name, days: Math.floor((now - Date.parse(lastGain.get(f.id))) / 864e5) }))
+  // los de precio automático se actualizan solos: solo cuentan los que se valorizan a mano
+  const stale = investmentSummaries().filter(f => Math.abs(f.balance) > 0 && f.lastValue && !(isUnits(f) && f.priceSource && f.priceSource !== 'manual'))
+    .map(f => ({ id: f.id, name: f.name, days: Math.floor((now - Date.parse(f.lastValue)) / 864e5) }))
     .filter(f => f.days > 35).sort((a, b) => b.days - a.days);
   if (stale.length) items.push({ type: 'invest', key: 'invest', funds: stale });
   // cuentas que ya se cuadraron con el banco alguna vez: se recuerda una vez al mes si tuvieron movimientos
@@ -911,18 +1018,13 @@ export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 
 
 // Valor y aportado neto al cierre de cada mes, en la moneda del fondo.
 export function fundHistory(invId, months) {
-  const entries = db.all('invEntries').filter(e => e.invId === invId).sort((a, b) => a.date.localeCompare(b.date));
-  let j = 0, value = 0, invested = 0;
+  const inv = db.get('investments', invId);
+  if (!inv) return months.map(ym => ({ ym, value: 0, invested: 0 }));
+  const entries = entriesOf(invId);
   const cur = curYm();
   return months.map((ym) => {
-    const end = ym === cur ? todayStr() : monthEnd(ym);
-    while (j < entries.length && entries[j].date <= end) {
-      const e = entries[j++];
-      const s = e.kind === 'withdraw' ? -1 : 1;
-      value += s * e.amount;
-      if (e.kind !== 'gain') invested += s * e.amount;
-    }
-    return { ym, value, invested };
+    const st = fundStats(inv, ym === cur ? todayStr() : monthEnd(ym), entries);
+    return { ym, value: st.balance, invested: st.invested };
   });
 }
 
@@ -933,7 +1035,7 @@ export function portfolioHistory(months) {
   const out = months.map(ym => ({ ym, value: 0, invested: 0 }));
   const cur = curYm();
   for (const f of db.all('investments')) {
-    if (currencyInfo(f.currency).convertible === false) continue;
+    if (isPoints(f) || currencyInfo(f.currency).convertible === false) continue;
     const h = fundHistory(f.id, months);
     h.forEach((p, k) => {
       if (!p.value && !p.invested) return;
@@ -948,7 +1050,8 @@ export function portfolioHistory(months) {
 // Primer mes con registros de inversión (o de un fondo).
 export function firstInvestmentMonth(invId = null) {
   let first = null;
-  for (const e of db.all('invEntries')) if ((!invId || e.invId === invId) && (!first || e.date < first)) first = e.date;
+  const skip = new Set(invId ? [] : db.all('investments').filter(isPoints).map(i => i.id));
+  for (const e of db.all('invEntries')) if ((invId ? e.invId === invId : !skip.has(e.invId)) && (!first || e.date < first)) first = e.date;
   return first ? first.slice(0, 7) : null;
 }
 

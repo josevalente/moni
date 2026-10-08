@@ -361,3 +361,11 @@ select:disabled { opacity: .65; }
 .recon-mark.from { background: var(--bg); color: var(--muted); }
 .list .recon-mark:first-child { margin-top: 0; border-radius: var(--radius) var(--radius) 0 0; }
 .drift-list { margin: 6px 0; }
+
+/* ---- Inversiones por cantidad y puntos ------------------------------------------ */
+.steps { padding-left: 20px; margin: 8px 0 12px; display: grid; gap: 6px; }
+.sym-search { display: flex; gap: 8px; align-items: center; }
+.sym-search input { flex: 1; min-width: 0; }
+.sym-results { display: grid; margin-top: 4px; }
+.sym-results .row { min-height: 44px; padding: 6px 2px; }
+.sym-results .title, .sym-results .sub { white-space: normal; }

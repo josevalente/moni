@@ -72,7 +72,7 @@ function updateBadge() {
 window.addEventListener('moni:badge', updateBadge);
 // al volver a la app: la fecha pudo cambiar (nuevo mes, cuentas que vencen)
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && refresh && db.count('people')) { refresh(); updateBadge(); }
+  if (document.visibilityState === 'visible' && refresh && db.count('people')) { refresh(); updateBadge(); FX.refreshRates().catch(() => {}); }
 });
 
 let rafPending = false;

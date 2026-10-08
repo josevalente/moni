@@ -1,6 +1,7 @@
 // Inicio: primero lo que hay que hacer (pendientes), luego el mes, y al final el panorama.
 import * as db from '../db.js';
 import * as M from '../model.js';
+import * as FX from '../fx.js';
 import { fill, h, bars, modal, toast } from '../ui.js';
 import { txRow } from './txs.js';
 import { openCategoryDetail } from './reports.js';
@@ -32,7 +33,7 @@ async function registerFixed(b) {
     kind: 'out', date: M.todayStr(), amount: t.amount, currency: t.currency, categoryId: b.catId,
     alloc: t.alloc || 'none', paidBy: t.paidBy, accountId: t.paidBy === owner ? usableAcc(t.accountId) : null, desc: t.desc || '',
   };
-  if (t.currency !== M.base()) { const fx = M.rateFor(t.currency, tx.date); if (fx != null) tx.fx = fx; }
+  Object.assign(tx, FX.fxFields(t.currency, tx.date));
   const saved = await db.put('tx', tx);
   toast(`${b.cat.name} registrado: ${M.fmt(t.amount, t.currency)}`, { label: 'Deshacer', onAction: () => db.del('tx', saved.id) });
 }
@@ -45,7 +46,7 @@ async function registerMany(list) {
     const t = b.template;
     const tx = { id: db.uid(), kind: 'out', date: today, amount: t.amount, currency: t.currency, categoryId: b.catId,
       alloc: t.alloc || 'none', paidBy: t.paidBy, accountId: t.paidBy === owner ? usableAcc(t.accountId) : null, desc: t.desc || '' };
-    if (t.currency !== M.base()) { const fx = M.rateFor(t.currency, today); if (fx != null) tx.fx = fx; }
+    Object.assign(tx, FX.fxFields(t.currency, today));
     return tx;
   });
   await db.putMany('tx', txs);
@@ -238,7 +239,8 @@ export function renderHome(root) {
         h('div', null, h('span', null, 'Cuentas'), M.fmt(nw.cash, base)),
         h('div', null, h('span', null, 'Tarjetas'), M.fmt(nw.cards, base)),
         h('div', null, h('span', null, 'Inversiones'), M.fmt(nw.inv, base)),
-        h('div', null, h('span', null, 'Deudas'), M.fmt(nw.debts, base))),
+        h('div', null, h('span', null, 'Deudas'), M.fmt(nw.debts, base)),
+        nw.points ? h('div', null, h('span', null, 'Puntos y millas'), M.fmt(nw.points, base)) : null),
       nw.missing.length ? h('div', { class: 'warn' }, `Falta tipo de cambio de ${nw.missing.join(', ')}; se asumió 1. Actualízalo en Más › Monedas.`) : null),
     h('section', { class: 'card' },
       h('h3', null, 'Cuentas'),

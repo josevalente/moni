@@ -3,6 +3,7 @@
 // probables (repetido, en otra cuenta, mal tipeado…) y ayuda a revisar uno a uno marcando lo que se encuentra.
 import * as db from '../db.js';
 import * as M from '../model.js';
+import * as FX from '../fx.js';
 import { confirmDialog, fill, formModal, h, toast } from '../ui.js';
 import { openTxForm } from './add.js';
 import { txRow } from './txs.js';
@@ -146,7 +147,7 @@ async function registerAdjust(acc, cmp) {
   if (!ok) return;
   const tx = { id: db.uid(), date: cmp.date, kind: d > 0 ? 'in' : 'out', amount: Math.abs(d), currency: acc.currency, accountId: acc.id,
     categoryId: cat ? cat.id : null, alloc: 'none', paidBy: M.ownerId(), desc: 'Descuadre con el banco' };
-  if (acc.currency !== M.base()) { const fx = M.rateFor(acc.currency, tx.date); if (fx != null) tx.fx = fx; }
+  Object.assign(tx, FX.fxFields(acc.currency, tx.date));
   const prevRec = acc.reconciled || null, prevCheck = getCheck(acc.id);
   setCheck(acc.id, null);
   await db.put('tx', tx);

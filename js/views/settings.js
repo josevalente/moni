@@ -6,6 +6,7 @@ import { fill, h, modal, toast, formModal, confirmDialog, promptDialog, parseNum
 import { openSplitEditor } from './close.js';
 import { categoryPicker } from './add.js';
 import { renderInvest } from './invest.js';
+import { renderPoints } from './points.js';
 import { renderDebts } from './debts.js';
 import { openAccount } from './account.js';
 
@@ -249,21 +250,25 @@ function renderSplits(root) {
 // ---------------------------------------------------------------- monedas
 function renderCurrencies(root) {
   const st = M.settings();
-  const latest = (cur) => {
-    const rs = db.all('rates').filter(r => r.cur === cur).sort((a, b) => b.date.localeCompare(a.date));
-    return rs[0];
-  };
+  const latest = (cur) => M.seriesAt(cur, M.todayStr());   // el de hoy (la UF se publica por adelantado)
+  const at = FX.lastFetchAt();
+  const pending = db.all('tx').filter(t => t.fxPending).length;
+  const dShort = (d) => new Date(d + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
   fill(root, back(), h('div', { class: 'card-head' }, h('h2', null, 'Monedas y tipo de cambio'),
     h('button', { class: 'btn primary small', onclick: async (e) => {
       e.target.disabled = true; e.target.textContent = 'Actualizando…';
       const r = await FX.refreshRates({ force: true });
-      toast(r.ok ? `Tipos de cambio actualizados (${r.count})` : (r.reason === 'offline' ? 'Sin conexión: se usa el último valor guardado' : 'No se pudo actualizar'));
+      const usd = M.seriesAt('USD', M.todayStr());
+      toast(r.ok ? `Tipos de cambio al día${usd ? `: dólar ${M.fmt(usd.rate, st.baseCurrency)} (${dShort(usd.date)})` : ''}${r.failed ? '. Algunas monedas no respondieron.' : ''}`
+        : (r.reason === 'offline' ? 'Sin conexión: se usa el último valor guardado' : 'mindicador.cl no respondió. Se usa el último valor guardado; inténtalo más tarde.'), { ms: 6000 });
       renderCurrencies(root);
     } }, 'Actualizar ahora')),
   h('section', { class: 'card' },
-    h('p', { class: 'muted' }, `Moneda base: ${st.baseCurrency}. Cada movimiento guarda el tipo de cambio del día en que se registró, así el pasado no se mueve cuando cambia el dólar. Fuente: mindicador.cl (con conexión); sin conexión se usa el último valor.`),
+    h('p', { class: 'muted' }, `Moneda base: ${st.baseCurrency}. Cada movimiento guarda el tipo de cambio del día en que se registró, así el pasado no se mueve cuando cambia el dólar. Fuente: mindicador.cl, se consulta al abrir la app y antes de guardar algo en otra moneda.`),
+    h('p', { class: 'small' }, at ? `Última consulta: ${new Date(at).toLocaleString('es-CL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'Aún no se consulta desde este teléfono.',
+      pending ? ` · ${pending} movimiento${pending === 1 ? '' : 's'} esperando el tipo de cambio de su fecha (se completan solos al consultar).` : ''),
     st.currencies.map(c => { const r = latest(c.code); return h('div', { class: 'row static' },
-      h('div', { class: 'main' }, h('div', { class: 'title' }, `${c.code} · ${c.symbol}`), h('div', { class: 'sub' }, c.code === st.baseCurrency ? 'moneda base' : (c.convertible === false ? 'sin conversión (ej: millas)' : r ? `1 ${c.code} = ${M.fmt(r.rate, st.baseCurrency)} (${r.date})${r.manual ? ' · manual' : ''}` : 'sin tipo de cambio'))),
+      h('div', { class: 'main' }, h('div', { class: 'title' }, `${c.code} · ${c.symbol}`), h('div', { class: 'sub' }, c.code === st.baseCurrency ? 'moneda base' : (c.convertible === false ? 'sin conversión (ej: millas)' : r ? `1 ${c.code} = ${M.fmt(r.rate, st.baseCurrency)} · valor del ${dShort(r.date)}${r.manual ? ' · manual' : ''}` : 'sin tipo de cambio'))),
       c.code !== st.baseCurrency && c.convertible !== false ? h('button', { class: 'btn small', onclick: async () => {
         const v = await promptDialog(`Tipo de cambio ${c.code}`, { label: `1 ${c.code} en ${st.baseCurrency} (hoy)`, type: 'number', value: r ? String(r.rate).replace('.', ',') : '' });
         const n = parseNum(v); if (v != null && Number.isFinite(n) && n > 0) { await FX.setManualRate(c.code, M.todayStr(), n); renderCurrencies(root); }
@@ -369,7 +374,7 @@ function renderBackup(root) {
           await db.wipe();
           // también las preferencias de este teléfono. Se vuelve a la bienvenida (importar un respaldo o empezar
           // de cero) en vez de crear personas nuevas que después se duplicarían al combinar
-          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
           location.hash = '#/'; toast('Datos borrados');
         }
       } }, 'Borrar todos los datos'))));
@@ -379,12 +384,14 @@ function renderBackup(root) {
 export function renderMore(root, sub) {
   const subs = { categorias: renderCategories, cuentas: renderAccounts, personas: renderPeople, reparto: renderSplits, monedas: renderCurrencies, respaldo: renderBackup };
   if (sub === 'inversiones') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
+  if (sub === 'puntos') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Puntos y millas'), inner); renderPoints(inner); return () => renderPoints(inner); }
   if (sub === 'deudas') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
   if (subs[sub]) { const r = subs[sub](root); return typeof r === 'function' ? r : () => subs[sub](root); }
   const item = (to, icon, title, sub2) => h('a', { class: 'row link', href: '#/mas/' + to }, h('div', { class: 'icon' }, icon), h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub2)), h('div', { class: 'chev' }, '›'));
   fill(root, 
     h('section', { class: 'card' },
-      item('inversiones', '📈', 'Inversiones', 'Fondos, AFP, APV: aportes y valor actual'),
+      item('inversiones', '📈', 'Inversiones', 'Fondos, acciones, ETF, AFP, APV: valor, precios y dividendos'),
+      item('puntos', '🎁', 'Puntos y millas', 'Dólares-Premio, LATAM Pass y otros programas'),
       item('deudas', '🤝', 'Deudas', 'Lo que debes o te deben, en cualquier moneda')),
     h('section', { class: 'card' },
       item('categorias', '🏷️', 'Categorías', 'Tus ítems de gasto: nombre, grupo, reparto'),

@@ -4,6 +4,7 @@
 // etiqueta van en una línea resumida que se abre solo para cambiarlos.
 import * as db from '../db.js';
 import * as M from '../model.js';
+import * as FX from '../fx.js';
 import { fill, h, modal, toast, confirmDialog } from '../ui.js';
 
 const LAST_ACC = 'moni.lastAccount';
@@ -265,18 +266,23 @@ export function openTxForm(existing, defaults = {}) {
   }
   amountIn.addEventListener('input', () => { s.amount = amountIn.value; updateEval(); updateFx(); if (toAmtInput) toAmtInput.placeholder = toAmtHint(); });
 
+  let fxAsked = false;
   function updateFx() {
     const box = root.querySelector('.fxline');
     if (!box) return;
     if (s.currency === base || s.kind === 'transfer' && !s.toAccountId) { fill(box); return; }
     const auto = M.rateFor(s.currency, s.date);
     const rate = s.fxTouched && s.fx != null ? s.fx : auto;
+    // sin consultar hoy: se consulta ahora y la línea se actualiza sola
+    if (!FX.fetchedToday() && !fxAsked && navigator.onLine !== false) { fxAsked = true; FX.refreshRates().then(() => { if (!s.fxTouched) updateFx(); }).catch(() => {}); }
+    const rec = M.seriesAt(s.currency, s.date);
     const a = M.evalAmount(s.amount);
     const fxIn = h('input', { type: 'text', inputmode: 'decimal', value: rate != null ? String(rate).replace('.', ',') : '', placeholder: 'tipo de cambio', 'aria-label': 'Tipo de cambio' });
     fxIn.addEventListener('input', () => { s.fx = M.parseAmount(fxIn.value); s.fxTouched = true; eq.textContent = eqText(); });
     const eqText = () => {
       const r = s.fxTouched ? s.fx : auto;
-      return Number.isFinite(a) && r ? `≈ ${M.fmt(a * r, base)}` : (r == null ? 'Sin tipo de cambio guardado: ingrésalo' : '');
+      const when = !s.fxTouched && rec && rec.date !== s.date ? ` (valor del ${new Date(rec.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })})` : '';
+      return Number.isFinite(a) && r ? `≈ ${M.fmt(a * r, base)}${when}` : (r == null ? 'Sin tipo de cambio guardado: ingrésalo' : '');
     };
     const eq = h('span', { class: 'muted' }, eqText());
     fill(box, h('label', { class: 'field inline' }, h('span', null, `1 ${s.currency} =`), fxIn, h('span', null, base)), eq);
@@ -457,8 +463,15 @@ export function openTxForm(existing, defaults = {}) {
       accountId: s.accountId || null, desc: (s.desc || '').trim(), tag: (s.tag || '').trim() || undefined, paidBy: s.paidBy,
     };
     if (!isEdit) tx.id = db.uid();
-    const fx = s.currency === M.base() ? null : (s.fxTouched && s.fx ? s.fx : M.rateFor(s.currency, s.date));
-    if (fx != null && s.currency !== M.base()) tx.fx = fx; else delete tx.fx;
+    delete tx.fx; delete tx.fxPending;
+    if (s.currency !== M.base()) {
+      if (s.fxTouched && s.fx) tx.fx = s.fx;
+      else {
+        // el tipo de cambio del día: si no se ha consultado hoy y hay conexión, se consulta antes de guardar
+        await FX.ensureFresh(s.currency);
+        Object.assign(tx, FX.fxFields(s.currency, s.date));
+      }
+    }
     if (isFlow) {
       tx.categoryId = s.categoryId;
       tx.alloc = s.alloc === 'shared' ? 'shared' : (s.alloc === 'payer' || !s.alloc || s.alloc === s.paidBy ? 'none' : 'p:' + s.alloc);
@@ -469,6 +482,7 @@ export function openTxForm(existing, defaults = {}) {
       const toCur = M.account(s.toAccountId).currency;
       let ta = M.parseAmount(s.toAmount);
       if (toCur !== s.currency && !Number.isFinite(ta)) {
+        await FX.ensureFresh(toCur !== M.base() ? toCur : s.currency);
         ta = convert(Math.abs(amount), s.currency, toCur);
         if (ta == null) { toast(`Falta el tipo de cambio: escribe el monto recibido en ${toCur}`); return; }
         ta = Math.round(ta * 100) / 100;
