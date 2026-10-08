@@ -100,10 +100,18 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
   const base = M.base();
   const cat = catId ? M.category(catId) : null;
   const title = cat ? `${cat.icon ? cat.icon + ' ' : ''}${cat.name}` : (group || 'Detalle');
-  const ds = { period, month: null };
+  const ds = { period, month: null, limit: 80 };
   const body = h('div');
+  const inGroup = (t) => { const c = M.category(t.categoryId); return c && (c.group || 'Otras') === group; };
+  const mine = (t) => (t.kind === 'out' || t.kind === 'in') && (catId ? (M.category(t.categoryId) || {}).id === catId : inGroup(t));
+  // "Todo": desde el primer movimiento de la categoría (o del grupo)
+  const firstMonth = () => {
+    let first = null;
+    for (const t of db.all('tx')) if (mine(t) && (!first || t.date < first)) first = t.date;
+    return first ? first.slice(0, 7) : M.curYm();
+  };
   const draw = () => {
-    const months = monthsOf(ds.period);
+    const months = ds.period === 'all' ? M.monthsBetween(firstMonth(), M.curYm()) : monthsOf(ds.period);
     const mx = M.categoryMatrix(months, { kind, mode, by: catId ? 'category' : 'group' });
     const row = mx.rows.find(r => (catId ? r.catId === catId : r.group === group));
     const values = row ? row.values : months.map(() => 0);
@@ -120,11 +128,11 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
       note: `${counts[i]} mov.${avg && ym !== cur ? ` · ${signed(pct(values[i], avg))} vs promedio` : ''}`,
     }));
     // movimientos de la categoría (o del grupo) en el período, o en el mes elegido
-    const inGroup = (t) => { const c = M.category(t.categoryId); return c && (c.group || 'Otras') === group; };
-    const txs = M.sortTx(db.all('tx').filter(t => (t.kind === 'out' || t.kind === 'in') && (catId ? t.categoryId === catId : inGroup(t))
+    // incluye las categorías combinadas en esta (sus movimientos ya suman aquí en la matriz)
+    const txs = M.sortTx(db.all('tx').filter(t => mine(t)
       && (sel >= 0 ? t.date.slice(0, 7) === months[sel] : t.date.slice(0, 7) >= months[0])));
-    const periodSeg = h('div', { class: 'seg small', role: 'group', 'aria-label': 'Período' }, [['6', '6 m'], ['12', '12 m'], ['24', '24 m'], ['60', '5 años']].map(([v, l]) => h('button', {
-      type: 'button', class: ds.period === v ? 'on' : '', 'aria-pressed': String(ds.period === v), onclick: () => { ds.period = v; ds.month = null; draw(); },
+    const periodSeg = h('div', { class: 'seg small', role: 'group', 'aria-label': 'Período' }, [['6', '6 m'], ['12', '12 m'], ['24', '24 m'], ['60', '5 años'], ['all', 'Todo']].map(([v, l]) => h('button', {
+      type: 'button', class: ds.period === v ? 'on' : '', 'aria-pressed': String(ds.period === v), onclick: () => { ds.period = v; ds.month = null; ds.limit = 80; draw(); },
     }, l)));
     const catNow = catId ? M.category(catId) : null;
     fill(body,
@@ -134,7 +142,7 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
       catNow && catNow.kind !== kind ? h('p', { class: 'warn' }, `Esta categoría ahora es de tipo "${({ expense: 'Gasto', income: 'Ingreso', loan: 'Préstamo', invest: 'Inversión', adjust: 'Ajuste' })[catNow.kind]}" y ya no entra en los reportes de ${kind === 'expense' ? 'gastos' : 'ingresos'}.`) : null,
       statTiles([
         { label: 'Promedio mensual', value: M.fmt(avg, base) },
-        { label: `Total ${months.length} meses`, value: M.fmt(total, base) },
+        { label: ds.period === 'all' ? `Total desde ${M.monthName(months[0]).toLowerCase()}` : `Total ${months.length} meses`, value: M.fmt(total, base) },
         lastClosed ? { label: M.monthName(lastClosed), value: M.fmt(lastVal, base), delta: avg ? `${signed(pct(lastVal, avg))} vs promedio` : null, tone: lastVal > avg ? (isExp ? 'up-bad' : 'up-good') : (isExp ? 'down-good' : 'down-bad') } : null,
       ]),
       vizCard({
@@ -143,13 +151,14 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
         chart: columnChart({
           items, cur: base, reference: avg || null, highlight: sel,
           ariaLabel: `${title} por mes`,
-          onPick: (i) => { ds.month = ds.month === months[i] ? null : months[i]; draw(); },
+          onPick: (i) => { ds.month = ds.month === months[i] ? null : months[i]; ds.limit = 80; draw(); },
         }),
         table: dataTable(['Mes', 'Monto', 'Movimientos'], months.map((ym, i) => [M.monthName(ym), M.fmt(values[i], base), String(counts[i])])),
       }),
       h('h4', null, sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : `Movimientos (${txs.length})`),
-      txs.length ? txs.slice(0, 80).map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Sin movimientos.'),
-      txs.length > 80 ? h('p', { class: 'muted center small' }, `Mostrando 80 de ${txs.length}. Elige un mes para ver el resto.`) : null);
+      txs.length ? txs.slice(0, ds.limit).map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Sin movimientos.'),
+      txs.length > ds.limit ? h('div', { class: 'center' }, h('button', { class: 'btn', type: 'button', onclick: () => { ds.limit += 200; draw(); } },
+        `Ver más (${ds.limit} de ${txs.length})`)) : null);
   };
   const unsub = db.subscribe(draw);
   modal(title, body, { wide: true, onClose: unsub });

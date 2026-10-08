@@ -36,7 +36,7 @@ export function txRow(tx, { showDate = false } = {}) {
   return h('button', { class: 'row tx ' + cls, onclick: () => openTxForm(tx) },
     h('div', { class: 'main' },
       h('div', { class: 'title' }, title),
-      h('div', { class: 'sub' }, (showDate ? tx.date.slice(8) + '/' + tx.date.slice(5, 7) + ' · ' : '') + sub.join(' · '))),
+      h('div', { class: 'sub' }, (showDate ? tx.date.slice(8) + '/' + tx.date.slice(5, 7) + (tx.date.slice(0, 4) !== M.todayStr().slice(0, 4) ? '/' + tx.date.slice(2, 4) : '') + ' · ' : '') + sub.join(' · '))),
     h('div', { class: 'amt' },
       h('div', null, amount),
       tx.currency !== base ? h('div', { class: 'sub' }, `≈ ${M.fmt(M.txBase(tx), base)}`) : null));
