@@ -4,7 +4,7 @@
   --neg: #b42318; --pos: #067647; --warn: #fff3cd; --warn-ink: #6b4e00;
   --p0: #0f766e; --p1: #7c5cc4;
   /* gráficos (paleta validada contra la superficie #ffffff: CVD, contraste y luminosidad) */
-  --viz-1: #2a78d6; --viz-2: #eb6834; --viz-grid: #e1e0d9; --viz-axis: #c3c2b7; --viz-deemph: #898781;
+  --viz-1: #2a78d6; --viz-2: #eb6834; --viz-3: #1baf7a; --viz-4: #eda100; --viz-5: #e87ba4; --viz-grid: #e1e0d9; --viz-axis: #c3c2b7; --viz-deemph: #898781;
   /* escala secuencial de un tono (matriz de calor): claro = poco, oscuro = mucho */
   --heat-0: #cde2fb; --heat-1: #9ec5f4; --heat-2: #6da7ec; --heat-3: #3987e5; --heat-4: #256abf; --heat-5: #104281;
   --heat-ink-0: #0b0b0b; --heat-ink-1: #0b0b0b; --heat-ink-2: #0b0b0b; --heat-ink-3: #0b0b0b; --heat-ink-4: #ffffff; --heat-ink-5: #ffffff;
@@ -18,7 +18,7 @@
     --brand: #2dd4bf; --brand-ink: #062a27; --brand-soft: #123b37;
     --neg: #ff8a80; --pos: #5fd69a; --warn: #3a3010; --warn-ink: #f6dc8a; --p0: #2dd4bf; --p1: #b39ddb;
     /* oscuro: los mismos tonos con pasos elegidos para la superficie #162022 (validados) */
-    --viz-1: #3987e5; --viz-2: #d95926; --viz-grid: #2c2c2a; --viz-axis: #383835; --viz-deemph: #898781;
+    --viz-1: #3987e5; --viz-2: #d95926; --viz-3: #199e70; --viz-4: #c98500; --viz-5: #d55181; --viz-grid: #2c2c2a; --viz-axis: #383835; --viz-deemph: #898781;
     /* en oscuro el ancla se invierte: poco = cerca del fondo, mucho = más claro */
     --heat-0: #0d366b; --heat-1: #184f95; --heat-2: #256abf; --heat-3: #3987e5; --heat-4: #6da7ec; --heat-5: #9ec5f4;
     --heat-ink-0: #ffffff; --heat-ink-1: #ffffff; --heat-ink-2: #ffffff; --heat-ink-3: #0b0b0b; --heat-ink-4: #0b0b0b; --heat-ink-5: #0b0b0b;
@@ -372,3 +372,22 @@ select:disabled { opacity: .65; }
 .sym-results .ok-note { color: var(--pos); }
 .sym-results .warn-note { color: var(--warn-ink); }
 .trade-total { font-weight: 600; font-variant-numeric: tabular-nums; margin: 4px 0 0; min-height: 1.4em; }
+
+/* ---- Inversiones: de dónde viene la ganancia (barra 100%) ----------------------- */
+.share-plot { margin-top: 8px; }
+.share-bar { display: flex; gap: 2px; height: 28px; }
+.share-seg { flex: 1 1 0; min-width: 4px; height: 100%; border: 0; padding: 0; cursor: pointer; border-radius: 0; }
+.share-seg:first-child { border-radius: 4px 0 0 4px; }
+.share-seg:last-child { border-radius: 0 4px 4px 0; }
+.share-seg:only-child { border-radius: 4px; }
+.share-seg.on, .share-seg:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; position: relative; z-index: 1; }
+.share-plot .viz-tip { top: 36px; }
+.share-legend { display: grid; gap: 2px; margin-top: 10px; }
+.share-row { display: grid; grid-template-columns: 12px 1fr auto auto; gap: 8px; align-items: center; font-size: 14px; padding: 4px 0; }
+.share-row .s-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-row .s-name small { color: var(--muted); }
+.share-row .s-amt { font-variant-numeric: tabular-nums; color: var(--muted); }
+.share-row .s-pct { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 48px; text-align: right; }
+.share-loss { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+.share-sum { margin-top: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.share-row .s-amt.neg { color: var(--neg); }

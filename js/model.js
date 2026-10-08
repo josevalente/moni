@@ -385,6 +385,22 @@ export function investmentSummaries({ archived = false } = {}) {
   }).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
 }
 
+// Cuánto ganó (o perdió) cada inversión: valor − aporte neto + dividendos pagados, en moneda base al tipo de
+// cambio de hoy (como el gráfico del total: la ganancia es la del fondo, no un efecto cambiario). Las cerradas
+// cuentan con lo que ganaron mientras existieron.
+export function gainBreakdown({ closed = true } = {}) {
+  const today = todayStr();
+  const out = [];
+  for (const i of db.all('investments')) {
+    if (isPoints(i) || (!closed && i.archived) || currencyInfo(i.currency).convertible === false) continue;
+    const st = fundStats(i);
+    if (!st.contrib && !st.gain && !st.divPaid) continue;
+    const r = rateFor(i.currency, today) ?? 1;
+    out.push({ id: i.id, name: i.name, closed: !!i.archived, gain: st.totalGain * r });
+  }
+  return out.sort((a, b) => b.gain - a.gain);
+}
+
 // Puntos y millas: saldo en su unidad y, si se puede, su valor en moneda base.
 export function pointsSummaries() {
   return db.all('investments').filter(i => isPoints(i) && !i.archived).map(i => {

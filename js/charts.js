@@ -337,6 +337,38 @@ export function legend(items) {
     h('span', null, it.name))));
 }
 
+// Barra 100% (parte de un todo): un segmento por parte, 2px de separación del color de fondo, extremos
+// redondeados, tooltip al tocar o pasar el puntero y recorrible con el teclado. Solo admite partes positivas.
+export function shareBar({ segments, cur, ariaLabel }) {
+  const total = segments.reduce((a, x) => a + x.value, 0);
+  const tip = tooltip();
+  const box = h('div', { class: 'viz-plot share-plot' });
+  const bar = h('div', { class: 'share-bar', role: 'group', 'aria-label': ariaLabel });
+  const pctOf = (v) => `${nf1.format(v / total * 100)}%`;
+  let active = null;
+  const hide = () => { tip.hide(); if (active) active.classList.remove('on'); active = null; };
+  segments.forEach((sg) => {
+    const el = h('button', {
+      type: 'button', class: 'share-seg', style: { flexGrow: String(sg.value), background: `var(${sg.color})` },
+      'aria-label': `${sg.name}: ${compactMoney(sg.value, cur)}, ${pctOf(sg.value)}`,
+    });
+    const show = () => {
+      if (active) active.classList.remove('on');
+      active = el; el.classList.add('on');
+      const r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+      tip.show(box, r.left - b.left + r.width / 2, [{ key: sg.color, value: pctOf(sg.value), label: compactMoney(sg.value, cur) }], sg.name);
+    };
+    el.addEventListener('pointerenter', show);
+    el.addEventListener('focus', show);
+    el.addEventListener('click', show);
+    el.addEventListener('pointerleave', hide);
+    el.addEventListener('blur', hide);
+    bar.append(el);
+  });
+  box.append(bar, tip.el);
+  return box;
+}
+
 // Tabla equivalente (accesible) de cualquier gráfico.
 export function dataTable(headers, rows) {
   return h('div', { class: 'viz-table-wrap' }, h('table', { class: 'tbl viz-table' },

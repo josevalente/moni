@@ -8,7 +8,7 @@ import * as M from '../model.js';
 import * as FX from '../fx.js';
 import * as PX from '../prices.js';
 import { fill, h, modal, toast, formModal, promptDialog, parseNum, confirmDialog } from '../ui.js';
-import { lineChart, sparkline, vizCard, dataTable } from '../charts.js';
+import { lineChart, sparkline, vizCard, dataTable, shareBar } from '../charts.js';
 import { openTxForm } from './add.js';
 
 const HORIZONS = [{ v: 'short', l: 'Corto / mediano plazo' }, { v: 'long', l: 'Largo plazo (AFP, APV…)' }];
@@ -481,9 +481,57 @@ function openDetail(id) {
   draw();
 }
 
+// ---- de dónde viene la ganancia -----------------------------------------------------------------
+// Barra 100% con lo que ganó cada inversión (valor − aporte neto + dividendos). Una barra 100% no puede
+// mostrar pérdidas: si alguna inversión vale menos que lo aportado, la barra reparte solo lo que ganaron las
+// que subieron y las que restaron van debajo con su monto, más la cuenta hasta la ganancia neta.
+const GAIN_COLORS = ['--viz-1', '--viz-2', '--viz-3', '--viz-4'];
+const OTHER_COLOR = '--viz-5';
+
+function gainShareCard(redraw) {
+  const base = M.base();
+  const list = M.gainBreakdown({ closed: view.closed });
+  const half = 10 ** -M.currencyInfo(base).decimals;
+  const winners = list.filter(x => x.gain >= half), losers = list.filter(x => x.gain <= -half);
+  const up = winners.reduce((a, x) => a + x.gain, 0), down = losers.reduce((a, x) => a + x.gain, 0);
+  const seg = h('div', { class: 'seg small', role: 'group', 'aria-label': 'Qué inversiones' }, [[true, 'Todas'], [false, 'Activas']].map(([v, l]) => h('button', {
+    type: 'button', class: view.closed === v ? 'on' : '', 'aria-pressed': String(view.closed === v), onclick: () => { view.closed = v; redraw(); },
+  }, l)));
+  // hasta 4 con nombre propio; el resto se junta en "Otras" (más colores no se distinguen)
+  const top = winners.length > 5 ? winners.slice(0, 4) : winners.slice(0, 5);
+  const rest = winners.slice(top.length);
+  const segments = top.map((x, i) => ({ name: x.name + (x.closed ? ' (cerrada)' : ''), value: x.gain, color: GAIN_COLORS[i] || OTHER_COLOR }));
+  if (rest.length) segments.push({ name: `Otras (${rest.length})`, value: rest.reduce((a, x) => a + x.gain, 0), color: OTHER_COLOR, sub: rest.map(x => x.name).join(', ') });
+  const pct = (v) => `${new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1 }).format(v / up * 100)}%`;
+  const row = (sg) => h('div', { class: 'share-row' },
+    h('span', { class: 'viz-key-rect', style: { background: `var(${sg.color})` } }),
+    h('span', { class: 'share-name s-name', title: sg.sub || null }, sg.name, sg.sub ? h('small', null, ` · ${sg.sub}`) : null),
+    h('span', { class: 's-amt' }, M.fmt(sg.value, base)),
+    h('span', { class: 's-pct' }, pct(sg.value)));
+  const chart = !winners.length
+    ? h('p', { class: 'empty' }, losers.length ? 'Ninguna inversión vale más que lo aportado.' : 'Aún no hay ganancias registradas.')
+    : h('div', null,
+      shareBar({ segments, cur: base, ariaLabel: `Ganancia por inversión: ${segments.map(s => `${s.name} ${pct(s.value)}`).join(', ')}` }),
+      h('div', { class: 'share-legend' }, segments.map(row)));
+  const lossBox = losers.length ? h('div', { class: 'share-loss' },
+    h('div', { class: 'label' }, 'Restaron (valen menos que lo aportado)'),
+    losers.map(x => h('div', { class: 'share-row' }, h('span'), h('span', { class: 's-name' }, x.name + (x.closed ? ' (cerrada)' : '')), h('span', { class: 's-amt neg' }, M.fmt(x.gain, base)), h('span'))),
+    h('div', { class: 'share-sum' }, `Ganaron ${M.fmt(up, base)} − restaron ${M.fmt(-down, base)} = ganancia neta ${M.fmt(up + down, base)}`)) : null;
+  return vizCard({
+    title: '¿Qué inversión ganó más?',
+    subtitle: losers.length
+      ? `Valor menos aporte neto · % sobre lo que ganaron las que subieron (${M.fmt(up, base)})`
+      : `Valor menos aporte neto · % sobre la ganancia total (${M.fmt(up, base)})`,
+    actions: seg,
+    chart: h('div', null, chart, lossBox),
+    table: dataTable(['Inversión', 'Ganancia', '% de lo ganado'], [...winners, ...losers].map(x => [x.name + (x.closed ? ' (cerrada)' : ''), M.fmt(x.gain, base), x.gain > 0 ? pct(x.gain) : '—'])),
+    footnote: `Incluye dividendos pagados. Las inversiones en otra moneda, al tipo de cambio de hoy.${view.closed ? ' Las cerradas cuentan con lo que ganaron mientras existieron.' : ''}`,
+  });
+}
+
 // ---- lista --------------------------------------------------------------------------------------
 
-const view = { span: 'all' };
+const view = { span: 'all', closed: true };
 
 export function renderInvest(root) {
   const funds = M.investmentSummaries();
@@ -546,6 +594,7 @@ export function renderInvest(root) {
       subtitle: `En ${base} al cierre de cada mes · incluye inversiones ya cerradas`,
       footnote: 'Las inversiones en otra moneda se convierten con el tipo de cambio de cada mes. ' + AFP_NOTE,
     }),
+    gainShareCard(() => renderInvest(root)),
     group('short', 'Corto / mediano plazo'), group('long', 'Largo plazo'),
     archived.length ? h('section', { class: 'card' }, h('h3', null, 'Archivadas'), archived.map(f => h('button', { class: 'row', onclick: () => editFund(f) },
       h('div', { class: 'main' }, h('div', { class: 'title' }, f.name), h('div', { class: 'sub' }, f.currency)), h('div', { class: 'amt muted' }, 'Editar')))) : null,
