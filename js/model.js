@@ -73,6 +73,9 @@ export const account = (id) => db.get('accounts', id);
 
 // ---- Formato y parseo ----------------------------------------------------
 
+// enteros con separador de miles: 2577 → "2.577"
+export const fmtInt = (n) => new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(n || 0);
+
 export function fmt(n, cur, { sign = false } = {}) {
   const c = currencyInfo(cur || base());
   let v = Number(n) || 0;

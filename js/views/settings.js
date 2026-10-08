@@ -2,7 +2,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import * as FX from '../fx.js';
-import { fill, h, modal, toast, formModal, confirmDialog, promptDialog, parseNum, shareFile } from '../ui.js';
+import { fill, h, modal, toast, formModal, confirmDialog, promptDialog, parseNum, shareFile, numText } from '../ui.js';
 import { openSplitEditor } from './close.js';
 import { categoryPicker } from './add.js';
 import { renderInvest } from './invest.js';
@@ -45,7 +45,7 @@ export function editCategory(c) {
         build: (v) => {
           const ins = {};
           const el = h('div', { class: 'grid-people' }, people.map(p => {
-            const inp = h('input', { type: 'text', inputmode: 'decimal', value: v && v[p.id] != null ? Math.round(v[p.id] * 1000) / 10 : '' });
+            const inp = h('input', { type: 'text', inputmode: 'decimal', value: v && v[p.id] != null ? numText(Math.round(v[p.id] * 1000) / 10) : '' });
             ins[p.id] = inp;
             return h('label', { class: 'field' }, h('span', null, `${p.name} (%)`), inp);
           }));
@@ -86,10 +86,10 @@ export async function confirmMerge(fromId, toId, { rename } = {}) {
   const from = M.category(fromId) && db.get('categories', fromId), to = db.get('categories', toId);
   if (!from || !to) return;
   const n = db.all('tx').filter(t => t.categoryId === fromId).length;
-  const ok = await confirmDialog(`Se moverán ${n} movimientos de "${from.name}" a "${to.name}"${rename && rename !== to.name ? ` (que pasará a llamarse "${rename}")` : ''}. Cada movimiento conserva su reparto y quién pagó. "${from.name}" quedará archivada.`, { ok: 'Combinar', danger: false });
+  const ok = await confirmDialog(`Se moverán ${M.fmtInt(n)} movimientos de "${from.name}" a "${to.name}"${rename && rename !== to.name ? ` (que pasará a llamarse "${rename}")` : ''}. Cada movimiento conserva su reparto y quién pagó. "${from.name}" quedará archivada.`, { ok: 'Combinar', danger: false });
   if (!ok) return;
   const undo = await M.mergeCategory(fromId, toId, { rename });
-  toast(`Combinadas: ${n} movimientos ahora en "${rename || to.name}"`, { label: 'Deshacer', onAction: () => M.undoMerge(undo), ms: 8000 });
+  toast(`Combinadas: ${M.fmtInt(n)} movimientos ahora en "${rename || to.name}"`, { label: 'Deshacer', onAction: () => M.undoMerge(undo), ms: 8000 });
 }
 
 // Revisar categorías sin uso en 12 meses y archivar las elegidas (siguen en el historial y los reportes).
@@ -124,7 +124,7 @@ function cleanupCard() {
     twins.map(t => h('div', { class: 'row static' },
       h('div', { class: 'main' },
         h('div', { class: 'title' }, `${t.from.name} → ${t.finalName}`),
-        h('div', { class: 'sub' }, `${t.count} movimientos se suman a "${t.to.name}"${t.finalName !== t.to.name ? ', que pasa a llamarse ' + t.finalName : ''}`)),
+        h('div', { class: 'sub' }, `${M.fmtInt(t.count)} movimientos se suman a "${t.to.name}"${t.finalName !== t.to.name ? ', que pasa a llamarse ' + t.finalName : ''}`)),
       h('button', { class: 'btn small', onclick: () => confirmMerge(t.from.id, t.to.id, { rename: t.finalName !== t.to.name ? t.finalName : undefined }) }, 'Combinar'))),
     unused.length ? h('div', { class: 'row static' },
       h('div', { class: 'main' }, h('div', { class: 'title' }, `${unused.length} categorías sin uso en 12 meses`), h('div', { class: 'sub' }, 'Archivarlas acorta la lista al registrar')),
@@ -270,7 +270,7 @@ function renderCurrencies(root) {
     st.currencies.map(c => { const r = latest(c.code); return h('div', { class: 'row static' },
       h('div', { class: 'main' }, h('div', { class: 'title' }, `${c.code} · ${c.symbol}`), h('div', { class: 'sub' }, c.code === st.baseCurrency ? 'moneda base' : (c.convertible === false ? 'sin conversión (ej: millas)' : r ? `1 ${c.code} = ${M.fmt(r.rate, st.baseCurrency)} · valor del ${dShort(r.date)}${r.manual ? ' · manual' : ''}` : 'sin tipo de cambio'))),
       c.code !== st.baseCurrency && c.convertible !== false ? h('button', { class: 'btn small', onclick: async () => {
-        const v = await promptDialog(`Tipo de cambio ${c.code}`, { label: `1 ${c.code} en ${st.baseCurrency} (hoy)`, type: 'number', value: r ? String(r.rate).replace('.', ',') : '' });
+        const v = await promptDialog(`Tipo de cambio ${c.code}`, { label: `1 ${c.code} en ${st.baseCurrency} (hoy)`, type: 'number', value: r ? numText(r.rate) : '' });
         const n = parseNum(v); if (v != null && Number.isFinite(n) && n > 0) { await FX.setManualRate(c.code, M.todayStr(), n); renderCurrencies(root); }
       } }, 'Manual') : null); }),
     h('button', { class: 'btn', onclick: () => formModal({
@@ -368,7 +368,7 @@ function renderBackup(root) {
       h('p', { class: 'muted' }, 'Combinar mezcla un archivo con tus datos actuales: por cada registro gana el cambio más reciente. Sirve para juntar lo que registran dos personas en teléfonos distintos.'),
       h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => doImport('merge') }, 'Combinar con archivo…'), h('button', { class: 'btn danger', onclick: () => doImport('replace') }, 'Reemplazar todo…'))),
     h('section', { class: 'card' }, h('h3', null, 'En este dispositivo'),
-      Object.entries(counts).map(([k, v]) => h('div', { class: 'row static' }, h('div', { class: 'main' }, h('div', { class: 'title' }, k)), h('div', { class: 'amt' }, String(v)))),
+      Object.entries(counts).map(([k, v]) => h('div', { class: 'row static' }, h('div', { class: 'main' }, h('div', { class: 'title' }, k)), h('div', { class: 'amt' }, M.fmtInt(v)))),
       h('div', { class: 'actions' }, h('button', { class: 'btn danger ghost', onclick: async () => {
         if (await confirmDialog('Se borrarán todos los datos de este dispositivo. Haz un respaldo antes. ¿Continuar?', { ok: 'Borrar todo' })) {
           await db.wipe();

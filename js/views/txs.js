@@ -119,9 +119,9 @@ export function renderTxs(root, sub) {
       out.push(txRow(tx));
     }
     if (!shown.length) out.push(h('p', { class: 'empty' }, q ? 'Nada coincide con la búsqueda.' : 'Sin movimientos este mes.'));
-    if (q && total > 300) out.push(h('p', { class: 'muted center' }, `Mostrando 300 de ${total}. Afina la búsqueda.`));
+    if (q && total > 300) out.push(h('p', { class: 'muted center' }, `Mostrando 300 de ${M.fmtInt(total)}. Afina la búsqueda.`));
     fill(list, ...out);
-    summary.textContent = total ? `${total} mov. · gastos ${M.fmt(sumOut, M.base())} · ingresos ${M.fmt(sumIn, M.base())}` : '';
+    summary.textContent = total ? `${M.fmtInt(total)} mov. · gastos ${M.fmt(sumOut, M.base())} · ingresos ${M.fmt(sumIn, M.base())}` : '';
   }
   const summary = h('div', { class: 'muted center small' });
   fill(root, h('div', { class: 'toolbar' }, search, chips), head, summary, list);

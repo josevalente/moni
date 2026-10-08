@@ -313,7 +313,7 @@ function symbolField(state) {
   };
 }
 
-function editFund(f) {
+export function editFund(f) {
   const isNew = !(f && f.id);
   const hasEntries = !isNew && db.all('invEntries').some(e => e.invId === f.id);
   const wasUnits = M.isUnits(f);

@@ -155,10 +155,10 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
         }),
         table: dataTable(['Mes', 'Monto', 'Movimientos'], months.map((ym, i) => [M.monthName(ym), M.fmt(values[i], base), String(counts[i])])),
       }),
-      h('h4', null, sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : `Movimientos (${txs.length})`),
+      h('h4', null, sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : `Movimientos (${M.fmtInt(txs.length)})`),
       txs.length ? txs.slice(0, ds.limit).map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Sin movimientos.'),
       txs.length > ds.limit ? h('div', { class: 'center' }, h('button', { class: 'btn', type: 'button', onclick: () => { ds.limit += 200; draw(); } },
-        `Ver más (${ds.limit} de ${txs.length})`)) : null);
+        `Ver más (${M.fmtInt(ds.limit)} de ${M.fmtInt(txs.length)})`)) : null);
   };
   const unsub = db.subscribe(draw);
   modal(title, body, { wide: true, onClose: unsub });

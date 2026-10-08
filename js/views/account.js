@@ -4,7 +4,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import * as FX from '../fx.js';
-import { confirmDialog, fill, formModal, h, toast } from '../ui.js';
+import { confirmDialog, fill, formModal, h, toast, numText } from '../ui.js';
 import { openTxForm } from './add.js';
 import { txRow } from './txs.js';
 import { editAccount } from './settings.js';
@@ -177,7 +177,7 @@ function registerMissing(acc, cmp, tpl, amount) {
   openTxForm(null, {
     kind: tpl.kind === 'in' ? 'in' : 'out', categoryId: tpl.categoryId, desc: tpl.desc || '', alloc: tpl.alloc || 'none',
     paidBy: M.ownerId(), accountId: acc.id, lockAccount: true, date: cmp.date,
-    amount: String(M.roundCur(amount, acc.currency)).replace('.', ','),
+    amount: numText(M.roundCur(amount, acc.currency)),
   });
 }
 
@@ -250,7 +250,7 @@ function tickSummary(acc, cmp, baseOk) {
   const f = (v) => M.fmt(v, acc.currency);
   const n = cmp.win.length;
   const half = 10 ** -M.currencyInfo(acc.currency).decimals / 2;
-  const lines = [h('div', null, `Desde el ${dShort(cmp.from)} hay ${n} movimiento${n === 1 ? '' : 's'}. Marca ✓ cada uno que encuentres en la app del banco; lo que falte agrégalo con ＋.`)];
+  const lines = [h('div', null, `Desde el ${dShort(cmp.from)} hay ${M.fmtInt(n)} movimiento${n === 1 ? '' : 's'}. Marca ✓ cada uno que encuentres en la app del banco; lo que falte agrégalo con ＋.`)];
   if (cmp.nTicked) {
     const left = n - cmp.nTicked;
     lines.push(h('div', null, h('b', null, `Encontrados ${cmp.nTicked} de ${n}`), left ? ` · sin marcar ${left} (${M.fmt(cmp.unticked, acc.currency, { sign: true })})` : ''));
@@ -418,8 +418,8 @@ export function renderAccount(root, accId) {
     }
     if (!shown.length) out.push(h('p', { class: 'empty' }, words.length ? 'Nada coincide en esta cuenta.' : review && st.onlyOpen ? 'Marcaste todos los movimientos del período.' : 'Esta cuenta aún no tiene movimientos.'));
     fill(list, out);
-    info.textContent = words.length ? `${shown.length} de ${rows.length} movimientos` : `${rows.length} movimientos`;
-    fill(more, shown.length > st.limit ? h('button', { class: 'btn', onclick: () => { st.limit += 300; draw(); } }, `Ver más antiguos (${shown.length - st.limit})`) : null);
+    info.textContent = words.length ? `${M.fmtInt(shown.length)} de ${M.fmtInt(rows.length)} movimientos` : `${M.fmtInt(rows.length)} movimientos`;
+    fill(more, shown.length > st.limit ? h('button', { class: 'btn', onclick: () => { st.limit += 300; draw(); } }, `Ver más antiguos (${M.fmtInt(shown.length - st.limit)})`) : null);
 
     // el monto buscado puede estar registrado en otra cuenta o sin cuenta
     const num = words.length === 1 ? words[0].num : null;

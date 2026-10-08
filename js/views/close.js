@@ -1,7 +1,7 @@
 // Cierre mensual: cuánto corresponde a cada uno y cuánto se cobra/paga.
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { fill, h, modal, toast, parseNum } from '../ui.js';
+import { fill, h, modal, toast, parseNum, numText } from '../ui.js';
 import { openTxForm } from './add.js';
 import { txRow } from './txs.js';
 
@@ -30,7 +30,7 @@ export function openSplitEditor(ym) {
     const isIncome = modeSel.value === 'income';
     fill(grid, ...people.map(p => {
       const initial = isIncome ? (prev.incomes ? prev.incomes[p.id] : '') : (prev.pct ? Math.round(prev.pct[p.id] * 1000) / 10 : Math.round((eff.pct[p.id] || 0) * 1000) / 10);
-      const inp = h('input', { type: 'text', inputmode: 'decimal', value: initial ?? '', placeholder: isIncome ? 'Sueldo mensual' : '%' });
+      const inp = h('input', { type: 'text', inputmode: 'decimal', value: numText(initial ?? ''), placeholder: isIncome ? 'Sueldo mensual' : '%' });
       inputs[p.id] = inp;
       return h('label', { class: 'field' }, h('span', null, `${p.name} ${isIncome ? '(sueldo)' : '(%)'}`), inp);
     }));

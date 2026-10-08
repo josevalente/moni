@@ -5,7 +5,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import * as FX from '../fx.js';
-import { fill, h, modal, toast, confirmDialog } from '../ui.js';
+import { fill, h, modal, toast, confirmDialog, numText, groupDigits } from '../ui.js';
 
 const LAST_ACC = 'moni.lastAccount';
 const KIND_CATS = { out: ['expense', 'loan', 'invest', 'adjust'], in: ['income', 'loan', 'invest', 'adjust', 'expense'] };
@@ -104,9 +104,9 @@ export function openTxForm(existing, defaults = {}) {
   };
   if (isEdit) {
     Object.assign(s, existing, {
-      amount: String(existing.amount).replace('.', ','), fx: existing.fx ?? null, fxTouched: existing.fx != null,
+      amount: numText(existing.amount), fx: existing.fx ?? null, fxTouched: existing.fx != null,
       desc: existing.desc || '', tag: existing.tag || '',
-      toAmount: existing.toAmount != null ? String(existing.toAmount).replace('.', ',') : '',
+      toAmount: existing.toAmount != null ? numText(existing.toAmount) : '',
     });
     s.alloc = allocToState(existing.alloc);
     s.allocTouched = true;
@@ -180,7 +180,7 @@ export function openTxForm(existing, defaults = {}) {
   const suggestBox = h('div', { class: 'suggest', role: 'listbox', id: listId, hidden: true });
   let suggestions = [], activeSug = -1;
 
-  const amountIn = h('input', { class: 'amount', type: 'text', inputmode: 'decimal', placeholder: '0', value: s.amount, autocomplete: 'off', 'aria-label': 'Monto' });
+  const amountIn = h('input', { class: 'amount', type: 'text', inputmode: 'decimal', placeholder: '0', value: groupDigits(s.amount), autocomplete: 'off', 'aria-label': 'Monto' });
   const evalHint = h('span', { class: 'amount-eval', 'aria-live': 'polite' });
   const lastAmtBox = h('span');
   const dateIn = h('input', { type: 'date', value: s.date, 'aria-label': 'Fecha' });
@@ -261,7 +261,7 @@ export function openTxForm(existing, defaults = {}) {
     evalHint.classList.toggle('bad', expr && !Number.isFinite(v));
     fill(lastAmtBox, s.lastAmount && !s.amount ? h('button', {
       type: 'button', class: 'chip small last-amount',
-      onclick: () => { s.amount = String(s.lastAmount.amount).replace('.', ','); amountIn.value = s.amount; updateEval(); updateFx(); },
+      onclick: () => { s.amount = numText(s.lastAmount.amount); amountIn.value = s.amount; updateEval(); updateFx(); },
     }, `Usar el último: ${M.fmt(s.lastAmount.amount, s.lastAmount.currency)}`) : null);
   }
   amountIn.addEventListener('input', () => { s.amount = amountIn.value; updateEval(); updateFx(); if (toAmtInput) toAmtInput.placeholder = toAmtHint(); });
@@ -277,7 +277,7 @@ export function openTxForm(existing, defaults = {}) {
     if (!FX.fetchedToday() && !fxAsked && navigator.onLine !== false) { fxAsked = true; FX.refreshRates().then(() => { if (!s.fxTouched) updateFx(); }).catch(() => {}); }
     const rec = M.seriesAt(s.currency, s.date);
     const a = M.evalAmount(s.amount);
-    const fxIn = h('input', { type: 'text', inputmode: 'decimal', value: rate != null ? String(rate).replace('.', ',') : '', placeholder: 'tipo de cambio', 'aria-label': 'Tipo de cambio' });
+    const fxIn = h('input', { type: 'text', inputmode: 'decimal', value: rate != null ? numText(rate) : '', placeholder: 'tipo de cambio', 'aria-label': 'Tipo de cambio' });
     fxIn.addEventListener('input', () => { s.fx = M.parseAmount(fxIn.value); s.fxTouched = true; eq.textContent = eqText(); });
     const eqText = () => {
       const r = s.fxTouched ? s.fx : auto;
@@ -415,7 +415,7 @@ export function openTxForm(existing, defaults = {}) {
         const to = M.account(s.toAccountId);
         toAmtInput = null;
         if (to && to.currency !== s.currency) {
-          const ta = h('input', { type: 'text', inputmode: 'decimal', value: s.toAmount, placeholder: toAmtHint() });
+          const ta = h('input', { type: 'text', inputmode: 'decimal', value: groupDigits(s.toAmount), placeholder: toAmtHint() });
           ta.addEventListener('input', () => { s.toAmount = ta.value; });
           toAmtInput = ta;
           parts.push(h('label', { class: 'field' }, h('span', null, `Monto recibido (${to.currency})`), ta,
@@ -509,7 +509,7 @@ export function openTxForm(existing, defaults = {}) {
   const dup = isEdit ? h('button', { class: 'btn ghost', onclick: () => {
     m.close();
     const { id, createdAt, updatedAt, ref, ...rest2 } = existing;
-    openTxForm(null, { ...rest2, date: M.todayStr(), amount: String(rest2.amount).replace('.', ','), toAmount: rest2.toAmount != null ? String(rest2.toAmount).replace('.', ',') : '', alloc: rest2.alloc ?? 'none' });
+    openTxForm(null, { ...rest2, date: M.todayStr(), amount: numText(rest2.amount), toAmount: rest2.toAmount != null ? numText(rest2.toAmount) : '', alloc: rest2.alloc ?? 'none' });
   } }, 'Duplicar') : null;
   const delBtn = isEdit ? h('button', { class: 'btn danger ghost', onclick: async () => {
     if (await confirmDialog('¿Eliminar este movimiento?')) {

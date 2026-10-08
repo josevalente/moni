@@ -35,7 +35,7 @@ function entryForm(p, kind, e = null) {
   });
 }
 
-function editProgram(p) {
+export function editProgram(p) {
   const isNew = !(p && p.id);
   formModal({
     title: isNew ? 'Nuevo programa' : 'Editar programa', value: p || { currency: 'Millas', type: 'points' },

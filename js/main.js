@@ -8,6 +8,8 @@ import { renderClose } from './views/close.js';
 import { renderMore } from './views/settings.js';
 import { renderReports } from './views/reports.js';
 import { openTxForm } from './views/add.js';
+import { editFund } from './views/invest.js';
+import { editProgram } from './views/points.js';
 
 const app = document.getElementById('app');
 const TABS = [
@@ -24,6 +26,16 @@ let current = null;
 function parseHash() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   return { tab: parts[0] || '', sub: parts[1] || '' };
+}
+
+// El ＋ agrega lo que corresponde a la pantalla: en Inversiones una inversión, en Puntos y millas un
+// programa, en la cartola de una cuenta un movimiento de esa cuenta; en el resto, un movimiento.
+function fabAction() {
+  const { tab, sub } = parseHash();
+  if (tab === 'mas' && sub === 'inversiones') return { label: 'Nueva inversión', run: () => editFund(null) };
+  if (tab === 'mas' && sub === 'puntos') return { label: 'Nuevo programa de puntos', run: () => editProgram(null) };
+  const acc = tab === 'movs' && sub ? M.account(sub) : null;
+  return { label: 'Nuevo movimiento', run: () => openTxForm(null, acc && !acc.archived ? { accountId: acc.id, lockAccount: true } : {}) };
 }
 
 function welcome() {
@@ -49,7 +61,9 @@ function draw() {
   const t = TABS.find(x => x.id === tab) || TABS[0];
   document.querySelectorAll('.tabbar a[data-tab]').forEach(a => a.classList.toggle('on', a.dataset.tab === t.id));
   document.getElementById('title').textContent = t.title;
-  document.getElementById('fab').hidden = !db.count('people');
+  const fab = document.getElementById('fab');
+  fab.hidden = !db.count('people');
+  fab.setAttribute('aria-label', fabAction().label);
   if (!db.count('people')) { fill(app, welcome()); refresh = null; return; }
   const key = location.hash;
   const body = h('div', { class: 'page' });
@@ -111,12 +125,7 @@ async function resetAppCache() {
 
 async function start() {
   await db.open();
-  document.getElementById('fab').addEventListener('click', () => {
-    // en la cartola de una cuenta, el movimiento nuevo es de esa cuenta
-    const { tab, sub } = parseHash();
-    const acc = tab === 'movs' && sub ? M.account(sub) : null;
-    openTxForm(null, acc && !acc.archived ? { accountId: acc.id, lockAccount: true } : {});
-  });
+  document.getElementById('fab').addEventListener('click', () => fabAction().run());
   if (!navigator.onLine) document.body.classList.add('offline');
   draw();
   window.__moniStarted = true;

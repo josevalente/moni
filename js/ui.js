@@ -21,6 +21,37 @@ export function h(tag, attrs, ...kids) {
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
+// ---- Separador de miles al escribir montos -----------------------------------------
+// "1250000" → "1.250.000". La coma es el decimal (teclado del iPhone en Chile) y los puntos los pone la app:
+// un punto escrito a mano se toma como separador de miles ("12.500" sigue siendo 12.500). Respeta las
+// operaciones: "7000+6900" → "7.000+6.900".
+export function groupDigits(str) {
+  return String(str ?? '').replace(/\d[\d.]*(?:,\d*)?/g, (m) => {
+    const i = m.indexOf(',');
+    const int = (i < 0 ? m : m.slice(0, i)).replace(/\./g, '').replace(/^0+(?=\d)/, '');
+    return int.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + (i < 0 ? '' : m.slice(i));
+  });
+}
+// número guardado → texto para un campo: 1478100.8 → "1.478.100,8"
+export const numText = (n) => (n == null || n === '' || Number.isNaN(n) ? '' : groupDigits(String(n).replace('.', ',')));
+
+if (typeof document !== 'undefined') {
+  // en captura: se reformatea antes de que el campo lo lea, manteniendo el cursor en su lugar
+  document.addEventListener('input', (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLInputElement) || el.inputMode !== 'decimal') return;
+    const v = el.value;
+    const nv = groupDigits(v);
+    if (nv === v) return;
+    const pos = el.selectionStart ?? v.length;
+    const keep = v.slice(0, pos).replace(/\./g, '').length;
+    let p = 0, k = 0;
+    while (p < nv.length && k < keep) { if (nv[p] !== '.') k++; p++; }
+    el.value = nv;
+    try { if (document.activeElement === el) el.setSelectionRange(p, p); } catch { /* ignore */ }
+  }, true);
+}
+
 // Reemplaza los hijos de un nodo aceptando listas anidadas y descartando null/false
 // (replaceChildren nativo dibuja "null" y "[object HTMLElement]" como texto).
 export function fill(el, ...kids) {
@@ -98,7 +129,7 @@ export function promptDialog(title, { label, value = '', type = 'text', hint } =
   return new Promise((resolve) => {
     let done = false;
     // Los montos van en un input de texto: el input numérico nativo rechaza la coma decimal.
-    const input = h('input', { type: type === 'number' ? 'text' : type, value, inputmode: type === 'number' ? 'decimal' : null, autocomplete: 'off' });
+    const input = h('input', { type: type === 'number' ? 'text' : type, value: type === 'number' ? groupDigits(value) : value, inputmode: type === 'number' ? 'decimal' : null, autocomplete: 'off' });
     const finish = (v) => { if (done) return; done = true; m.close(); resolve(v); };
     const m = modal(title, h('form', { onsubmit: (e) => { e.preventDefault(); finish(input.value); } },
       h('label', { class: 'field' }, h('span', null, label || ''), input, hint ? h('small', null, hint) : null)), {
@@ -138,7 +169,7 @@ export function formModal({ title, fields, value = {}, onSave, onDelete, saveLab
       input = c.el; get = c.get;
     } else {
       // número precargado con coma decimal: "0.125" se leería como miles
-      const shown = f.type === 'number' && typeof v === 'number' ? String(v).replace('.', ',') : (v ?? '');
+      const shown = f.type === 'number' ? (typeof v === 'number' ? numText(v) : groupDigits(v ?? '')) : (v ?? '');
       const inp = h('input', {
         type: f.type === 'number' ? 'text' : (f.type || 'text'), value: shown, placeholder: f.placeholder || '',
         inputmode: f.type === 'number' ? 'decimal' : null, list: f.list || null, autocapitalize: f.type === 'text' ? 'sentences' : null,
