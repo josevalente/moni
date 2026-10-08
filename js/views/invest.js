@@ -10,6 +10,7 @@ import * as PX from '../prices.js';
 import { fill, h, modal, toast, formModal, promptDialog, parseNum, confirmDialog } from '../ui.js';
 import { lineChart, sparkline, vizCard, dataTable, shareBar } from '../charts.js';
 import { openTxForm } from './add.js';
+import { allocationCard, inflationCard } from './insights.js';
 
 const HORIZONS = [{ v: 'short', l: 'Corto / mediano plazo' }, { v: 'long', l: 'Largo plazo (AFP, APV…)' }];
 const TYPES = [{ v: 'fund', l: 'Por valor: actualizo el saldo total' }, { v: 'units', l: 'Por cantidad: acciones, ETF, fondos mutuos, cripto' }];
@@ -595,6 +596,8 @@ export function renderInvest(root) {
       footnote: 'Las inversiones en otra moneda se convierten con el tipo de cambio de cada mes. ' + AFP_NOTE,
     }),
     gainShareCard(() => renderInvest(root)),
+    inflationCard(),
+    allocationCard(),
     group('short', 'Corto / mediano plazo'), group('long', 'Largo plazo'),
     archived.length ? h('section', { class: 'card' }, h('h3', null, 'Archivadas'), archived.map(f => h('button', { class: 'row', onclick: () => editFund(f) },
       h('div', { class: 'main' }, h('div', { class: 'title' }, f.name), h('div', { class: 'sub' }, f.currency)), h('div', { class: 'amt muted' }, 'Editar')))) : null,

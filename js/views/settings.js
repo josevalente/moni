@@ -423,6 +423,21 @@ function renderBackup(root) {
       } }, 'Borrar todos los datos'))));
 }
 
+// ---------------------------------------------------------------- Apple Pay
+// Una app web no recibe datos de los atajos del iPhone directamente: el atajo copia la compra al
+// portapapeles y en Moni se pega con "📋 Pegar compra" (una sola vez por compra).
+function applePayHelp() {
+  modal('Registrar desde Apple Pay', h('div', null,
+    h('p', null, 'Con un atajo del iPhone, cada vez que pagas con Apple Pay la compra (monto y comercio) queda copiada. Luego, en Moni tocas ＋ y "📋 Pegar compra": se completa el monto y el comercio, y las sugerencias ponen la categoría y la cuenta.'),
+    h('ol', { class: 'steps' },
+      h('li', null, 'Abre la app Atajos › Automatización › Nueva automatización › Transacción.'),
+      h('li', null, 'Elige tus tarjetas (Banco de Chile, Santander y otras de la lista de Apple Pay) y "Ejecutar inmediatamente".'),
+      h('li', null, 'Agrega la acción "Texto" y escribe: MONI|', h('i', null, 'Monto'), '|', h('i', null, 'Comercio'), ' (toca para insertar las variables "Monto" y "Comercio" de la entrada del atajo).'),
+      h('li', null, 'Agrega "Copiar al portapapeles". Opcional: "Mostrar notificación" con "Compra copiada para Moni".'),
+      h('li', null, 'Al pagar, abre Moni › ＋ › 📋 Pegar compra.')),
+    h('p', { class: 'muted small' }, 'Solo funciona con tarjetas en Apple Pay (Mercado Pago y BancoEstado no están). Si el monto llega en 0, revisa que la automatización tenga datos móviles y que el atajo use la variable "Monto". El portapapeles nunca sale de tu teléfono.')));
+}
+
 // ---------------------------------------------------------------- menú
 export function renderMore(root, sub) {
   const subs = { categorias: renderCategories, cuentas: renderAccounts, personas: renderPeople, reparto: renderSplits, monedas: renderCurrencies, respaldo: renderBackup };
@@ -442,6 +457,9 @@ export function renderMore(root, sub) {
       item('reparto', '⚖️', 'Reparto mensual', 'Sueldos o % que definen el cobro'),
       item('personas', '👥', 'Personas', 'Quiénes participan y este dispositivo'),
       item('monedas', '💱', 'Monedas y tipo de cambio', 'CLP, USD, EUR, UF…')),
-    h('section', { class: 'card' }, item('respaldo', '💾', 'Respaldo y datos', 'Exportar, importar y combinar')),
+    h('section', { class: 'card' }, item('respaldo', '💾', 'Respaldo y datos', 'Exportar, importar y combinar'),
+      h('button', { class: 'row link', onclick: applePayHelp }, h('div', { class: 'icon' }, '⚡'),
+        h('div', { class: 'main' }, h('div', { class: 'title' }, 'Registrar desde Apple Pay'), h('div', { class: 'sub' }, 'Un atajo del iPhone copia cada compra; en Moni la pegas')),
+        h('div', { class: 'chev' }, '›'))),
     h('p', { class: 'muted center small' }, 'Moni · tus datos se guardan solo en este dispositivo'));
 }

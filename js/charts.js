@@ -212,14 +212,18 @@ export function columnChart({ items, cur, height = 210, reference, refLabel = 'p
 
 // ---- Líneas (1 o más series en la misma unidad; nunca dos ejes) ---------------------
 // points: [{ short, long, ym? }] · series: [{ name, values, color: '--viz-1', area?: true }]
+// Una serie puede terminar antes (valores null al final, como el mes en curso) y una de referencia puede ir
+// punteada (dash). El rótulo directo va en el último valor de cada serie.
 export function lineChart({ points, series, cur, height = 230, extra, ariaLabel }) {
   const tip = tooltip();
   const multiYear = new Set(points.map(p => (p.ym || '').slice(0, 4))).size > 1;
+  const ok = (v) => v != null && Number.isFinite(v);
+  const lastIdx = series.map(sr => { let i = sr.values.length - 1; while (i > 0 && !ok(sr.values[i])) i--; return i; });
   const box = responsive((box, W) => {
-    const all = series.flatMap(sr => sr.values);
+    const all = series.flatMap(sr => sr.values).filter(ok);
     const { lo, hi, ticks } = niceScale(Math.min(0, ...all), Math.max(0, ...all));
     const padL = Math.max(...ticks.map(t => approxTextW(compactMoney(t, cur)))) + 10;
-    const lastLabels = series.map(sr => compactMoney(sr.values[sr.values.length - 1], cur));
+    const lastLabels = series.map((sr, k) => compactMoney(sr.values[lastIdx[k]], cur));
     const padR = Math.max(...lastLabels.map(l => approxTextW(l))) + 14;
     const padT = 12, padB = 24;
     const H = height, plotW = W - padL - padR, plotH = H - padT - padB;
@@ -231,17 +235,21 @@ export function lineChart({ points, series, cur, height = 230, extra, ariaLabel 
       svg.append(s('line', { x1: padL, x2: padL + plotW, y1: y(t), y2: y(t), class: t === 0 ? 'viz-base' : 'viz-grid' }));
       svg.append(s('text', { x: padL - 6, y: y(t) + 4, 'text-anchor': 'end', class: 'viz-tick' }, compactMoney(t, cur)));
     }
-    for (const sr of series) {
-      const d = sr.values.map((v, i) => `${i ? 'L' : 'M'}${xOf(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
-      if (sr.area) svg.append(s('path', { d: `${d}L${xOf(n - 1)},${y(0)}L${xOf(0)},${y(0)}Z`, class: 'viz-area', style: `fill: var(${sr.color})` }));
-      svg.append(s('path', { d, class: 'viz-line', style: `stroke: var(${sr.color})` }));
-    }
+    series.forEach((sr, k) => {
+      let d = '', pen = false;
+      sr.values.forEach((v, i) => { if (!ok(v)) { pen = false; return; } d += `${pen ? 'L' : 'M'}${xOf(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; });
+      if (sr.area) svg.append(s('path', { d: `${d}L${xOf(lastIdx[k])},${y(0)}L${xOf(0)},${y(0)}Z`, class: 'viz-area', style: `fill: var(${sr.color})` }));
+      svg.append(s('path', { d, class: 'viz-line' + (sr.dash ? ' dash' : ''), style: `stroke: var(${sr.color})` }));
+    });
     // rótulo directo del último valor; si dos rótulos chocan, se deja solo el primero (la leyenda y el tooltip cubren)
-    const ends = series.map((sr, k) => ({ k, y: y(sr.values[n - 1]), label: lastLabels[k], color: sr.color }));
+    const ends = series.map((sr, k) => ({ k, x: xOf(lastIdx[k]), y: y(sr.values[lastIdx[k]]), label: lastLabels[k], color: sr.color }));
     const shown = [];
-    for (const e of ends) if (!shown.some(o => Math.abs(o.y - e.y) < 13)) shown.push(e);
-    for (const e of ends) svg.append(s('circle', { cx: xOf(n - 1), cy: e.y, r: 4, class: 'viz-dot', style: `fill: var(${e.color})` }));
-    for (const e of shown) svg.append(s('text', { x: xOf(n - 1) + 8, y: e.y + 4, class: 'viz-value' }, e.label));
+    for (const e of ends) if (!shown.some(o => Math.abs(o.y - e.y) < 13 && Math.abs(o.x - e.x) < 60)) shown.push(e);
+    for (const e of ends) svg.append(s('circle', { cx: e.x, cy: e.y, r: 4, class: 'viz-dot', style: `fill: var(${e.color})` }));
+    for (const e of shown) {
+      const right = e.x + 8 + approxTextW(e.label) <= W;
+      svg.append(s('text', { x: right ? e.x + 8 : e.x - 8, y: e.y + (right ? 4 : -8), 'text-anchor': right ? 'start' : 'end', class: 'viz-value' }, e.label));
+    }
     // eje X: meses si son pocos, años si son muchos
     const axis = s('g');
     if (!multiYear || n <= 14) {
@@ -271,9 +279,13 @@ export function lineChart({ points, series, cur, height = 230, extra, ariaLabel 
       if (i < 0) { cross.setAttribute('visibility', 'hidden'); tip.hide(); return; }
       const x = xOf(i);
       vline.setAttribute('x1', x); vline.setAttribute('x2', x);
-      series.forEach((sr, k) => { dots[k].setAttribute('cx', x); dots[k].setAttribute('cy', y(sr.values[i])); });
+      series.forEach((sr, k) => {
+        const has = ok(sr.values[i]);
+        dots[k].setAttribute('visibility', has ? 'visible' : 'hidden');
+        if (has) { dots[k].setAttribute('cx', x); dots[k].setAttribute('cy', y(sr.values[i])); }
+      });
       cross.setAttribute('visibility', 'visible');
-      const rows = series.map(sr => ({ key: sr.color, value: M.fmt(sr.values[i], cur), label: sr.name }));
+      const rows = series.filter(sr => ok(sr.values[i])).map(sr => ({ key: sr.color, value: M.fmt(sr.values[i], cur), label: sr.name }));
       tip.show(box, x, rows.concat(extra ? extra(i) : []), points[i].long);
     };
     bindIndex(svg, box, n, xOf, { onActive: setActive, label: ariaLabel });
@@ -333,7 +345,7 @@ export function heatTable({ cols, rows, totals, cur, onRow, rowHeader = 'Categor
 // ---- Piezas comunes -----------------------------------------------------------------
 export function legend(items) {
   return h('div', { class: 'viz-legend' }, items.map(it => h('span', { class: 'viz-legend-item' },
-    h('span', { class: it.kind === 'rect' ? 'viz-key-rect' : 'viz-key-line', style: { background: `var(${it.color})` } }),
+    h('span', { class: it.kind === 'rect' ? 'viz-key-rect' : 'viz-key-line' + (it.dash ? ' dash' : ''), style: it.dash ? { borderColor: `var(${it.color})` } : { background: `var(${it.color})` } }),
     h('span', null, it.name))));
 }
 

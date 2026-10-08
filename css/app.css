@@ -391,3 +391,34 @@ select:disabled { opacity: .65; }
 .share-loss { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
 .share-sum { margin-top: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
 .share-row .s-amt.neg { color: var(--neg); }
+.viz-line.dash { stroke-dasharray: 5 4; }
+.viz-key-line.dash { height: 0; background: none; border-top: 2px dashed; }
+
+/* ---- Visualizaciones: ritmo, calendario, distribución, inflación ---------------- */
+.pace-msg { margin: 4px 0 0; font-size: 14px; font-weight: 600; }
+.pace-msg.up-bad::before { content: '▲ '; color: var(--neg); }
+.pace-msg.down-good::before { content: '▼ '; color: var(--pos); }
+.cal-grid { display: grid; grid-template-columns: 14px repeat(12, 1fr); grid-template-rows: repeat(7, auto); grid-auto-flow: column; gap: 3px; margin-top: 8px; }
+.cal-dow { font-size: 10px; color: var(--muted); align-self: center; grid-column: 1; }
+.cal-cell { display: inline-block; aspect-ratio: 1; min-width: 0; border-radius: 3px; border: 0; padding: 0; background: var(--bg); cursor: pointer; }
+.cal-legend .cal-cell { width: 12px; height: 12px; vertical-align: -2px; margin: 0 2px; cursor: default; }
+.cal-cell.none { background: none; box-shadow: inset 0 0 0 1px var(--line); }
+.cal-cell.future { background: none; cursor: default; }
+.cal-cell.h0 { background: var(--heat-0); } .cal-cell.h1 { background: var(--heat-1); } .cal-cell.h2 { background: var(--heat-2); }
+.cal-cell.h3 { background: var(--heat-3); } .cal-cell.h4 { background: var(--heat-4); } .cal-cell.h5 { background: var(--heat-5); }
+.cal-cell.today { outline: 2px solid var(--ink); outline-offset: 1px; }
+.cal-cell:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.cal-legend { margin-top: 8px; }
+.cal-card p { margin: 8px 0 0; }
+.alloc-block + .alloc-block { margin-top: 14px; }
+.alloc-block .label { margin-bottom: -2px; }
+.div-list { display: grid; gap: 10px; margin-top: 8px; }
+.div-row { display: grid; grid-template-columns: minmax(0, 1.2fr) 1fr 56px; gap: 10px; align-items: center; }
+.div-name { display: grid; min-width: 0; }
+.div-name span { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.div-name small { color: var(--muted); font-size: 12px; }
+.div-track { position: relative; height: 14px; }
+.div-zero { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--viz-axis); }
+.div-bar { position: absolute; top: 0; height: 100%; border-radius: 3px; }
+.div-val { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.paste-btn { margin-left: auto; }

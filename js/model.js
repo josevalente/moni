@@ -100,6 +100,26 @@ export function parseAmount(str) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+// Compra copiada al portapapeles por un atajo de iPhone (Apple Pay): "MONI|12.990|Jumbo", o un texto
+// cualquiera con un monto y el comercio ("$12.990 Jumbo"). Devuelve { amount, desc } o null.
+export function parsePurchase(text) {
+  const t = String(text ?? '').trim();
+  if (!t || t.length > 300) return null;
+  let amountStr, desc;
+  const parts = t.split('|').map(x => x.trim());
+  if (parts.length >= 3 && /^moni$/i.test(parts[0])) { amountStr = parts[1]; desc = parts.slice(2).join(' '); }
+  else {
+    const m = t.match(/(?:US\$|\$|CLP|USD)?\s*\d[\d.,]*/i);
+    if (!m) return null;
+    amountStr = m[0];
+    desc = t.replace(m[0], ' ');
+  }
+  const amount = parseAmount(String(amountStr).replace(/[^\d.,]/g, ''));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  desc = String(desc || '').replace(/[|·:]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return { amount, desc };
+}
+
 // Monto con operaciones simples, como en las celdas del Excel: "7.000+6.900", "45.990-5.000", "12.500*2".
 // Cada número usa el formato chileno de parseAmount; * y / van antes que + y -.
 export const isAmountExpression = (str) => /[+*/x×÷]|\d\s*-/i.test(String(str ?? '').replace(/^\s*-/, ''));
@@ -325,6 +345,8 @@ export function fundStats(inv, asOf = todayStr(), entries = null) {
       if (units && e.units) { qty += e.units; cost += a; }
     } else if (e.kind === 'withdraw') {
       withdraw += a; bal -= a; if (own) manualCum -= a;
+      // rescatar más de lo que vale (un depósito a plazo que vence con intereses): lo extra es ganancia
+      if (!units && bal < -1e-6) { gain -= bal; manualCum -= bal; bal = 0; }
       if (units && e.units) {
         const avg = qty > 0 ? cost / qty : 0;
         const n = Math.min(e.units, qty);
@@ -579,6 +601,104 @@ export function incomeOfMonth(ym, pid = null) {
     if (cat && cat.kind === 'income') t += txBase(tx);
   }
   return t;
+}
+
+// ---- Ritmo de gasto, calendario de registros, patrimonio en el tiempo -------------------------
+
+// Gasto de cada día del mes (misma regla que spendingByCategory: categorías de gasto, devoluciones restan;
+// "mine" = mi parte).
+export function dailySpend(ym, mode = 'total', pid = null) {
+  const ps = people();
+  const { pct } = splitFor(ym);
+  const me = pid || meId();
+  const n = Number(monthEnd(ym).slice(8));
+  const days = new Array(n).fill(0);
+  for (const tx of txsInMonth(ym)) {
+    if (tx.kind !== 'out' && tx.kind !== 'in') continue;
+    const cat = category(tx.categoryId);
+    if (!cat || cat.kind !== 'expense') continue;
+    let b = txBase(tx) * (tx.kind === 'in' ? -1 : 1);
+    if (mode === 'mine') {
+      const sh = shares(tx, cat, pct, ps);
+      if (sh) b *= (sh[me] || 0);
+      else if (tx.paidBy !== me) continue;
+    }
+    days[Number(tx.date.slice(8)) - 1] += b;
+  }
+  return days;
+}
+
+// Gasto acumulado del mes día a día contra un "mes típico": para cada día, la mediana de lo acumulado a esa
+// altura en los 6 meses cerrados anteriores (la mediana no se deja arrastrar por un mes con una compra grande).
+export function spendPace(ym, mode = 'total') {
+  const cum = (arr) => { let a = 0; return arr.map(v => (a += v)); };
+  const days = cum(dailySpend(ym, mode));
+  const prev = monthsBetween(addMonths(ym, -6), addMonths(ym, -1)).map(m => cum(dailySpend(m, mode)));
+  const med = (vals) => { const v = [...vals].sort((a, b) => a - b); const k = v.length; return k ? (k % 2 ? v[(k - 1) / 2] : (v[k / 2 - 1] + v[k / 2]) / 2) : 0; };
+  const typical = days.map((_, i) => med(prev.map(p => p[Math.min(i, p.length - 1)])));
+  const today = todayStr();
+  const upTo = ym === curYm() ? Number(today.slice(8)) : ym < curYm() ? days.length : 0;
+  return { days, typical, upTo, typicalTotal: med(prev.map(p => p[p.length - 1])) };
+}
+
+// Cuántos movimientos se registraron cada día, para ver los días que quedaron sin registrar.
+export function entryCounts(from, to) {
+  const m = new Map();
+  for (const t of db.all('tx')) if (t.date >= from && t.date <= to) m.set(t.date, (m.get(t.date) || 0) + 1);
+  return m;
+}
+
+// Patrimonio al cierre de cada mes, por componente, en moneda base con el tipo de cambio de ese mes.
+// Cuentas y tarjetas: saldo al cierre; inversiones: su valor (incluye las ya cerradas mientras existieron);
+// deudas: saldo según sus registros. No incluye puntos y millas.
+export function netWorthHistory(months) {
+  const cur = curYm();
+  const end = (ym) => (ym === cur ? todayStr() : monthEnd(ym));
+  const out = months.map(ym => ({ ym, cash: 0, cards: 0, inv: 0, debts: 0, total: 0 }));
+  for (const a of db.all('accounts')) {
+    if (a.excludeNW || currencyInfo(a.currency).convertible === false) continue;
+    const rows = accountLedger(a.id);
+    if (!rows.length) continue;
+    months.forEach((ym, k) => {
+      const v = balanceOn(rows, end(ym));
+      if (!v) return;
+      const b = v * (rateFor(a.currency, end(ym)) ?? 1);
+      if (a.type === 'credit') out[k].cards += b; else out[k].cash += b;
+    });
+  }
+  portfolioHistory(months).forEach((p, k) => { out[k].inv = p.value; });
+  const entries = db.all('debtEntries');
+  for (const d of db.all('debts')) {
+    if (d.excludeNW || currencyInfo(d.currency).convertible === false) continue;
+    const es = entries.filter(e => e.debtId === d.id);
+    months.forEach((ym, k) => {
+      const bal = es.filter(e => e.date <= end(ym)).reduce((a, e) => a + e.amount, 0);
+      if (bal) out[k].debts += (d.direction === 'owe' ? -1 : 1) * bal * (rateFor(d.currency, end(ym)) ?? 1);
+    });
+  }
+  for (const p of out) p.total = p.cash + p.cards + p.inv + p.debts;
+  return out;
+}
+
+// ¿Le gana a la UF? Rentabilidad anual de cada inversión contra lo que subió la UF (inflación) en el mismo
+// período. Real = (1 + rentabilidad) / (1 + UF) − 1.
+export function returnsVsInflation() {
+  const today = todayStr();
+  const ufNow = rateFor('UF', today);
+  if (!ufNow) return [];
+  const out = [];
+  for (const f of investmentSummaries()) {
+    if (currencyInfo(f.currency).convertible === false) continue;
+    const r = annualReturn(f);
+    const first = investmentEntries(f.id)[0];
+    if (r == null || !first) continue;
+    const yrs = (Date.parse(today) - Date.parse(first.date)) / 864e5 / 365;
+    const ufThen = rateFor('UF', first.date);
+    if (!ufThen || yrs <= 0) continue;
+    const uf = Math.pow(ufNow / ufThen, 1 / yrs) - 1;
+    out.push({ id: f.id, name: f.name, ret: r, uf, real: (1 + r) / (1 + uf) - 1, since: first.date, currency: f.currency });
+  }
+  return out.sort((a, b) => b.real - a.real);
 }
 
 // ---- Asistentes: sugerencias por descripción --------------------------------

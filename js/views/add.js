@@ -188,6 +188,18 @@ export function openTxForm(existing, defaults = {}) {
 
   // ---- sugerencias por descripción
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
+  async function pastePurchase() {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch { toast('No se pudo leer el portapapeles'); return; }
+    const p = M.parsePurchase(text);
+    if (!p) { toast('El portapapeles no tiene una compra (monto y comercio)'); return; }
+    s.desc = p.desc; descIn.value = p.desc;
+    s.amount = numText(p.amount); amountIn.value = s.amount;
+    updateEval(); updateFx();
+    descIn.focus();
+    updateSuggestions();          // con el comercio aparecen las sugerencias: un toque completa categoría y cuenta
+  }
+
   function updateSuggestions() {
     const isFlow = s.kind === 'out' || s.kind === 'in';
     const q = descIn.value.trim();
@@ -346,7 +358,9 @@ export function openTxForm(existing, defaults = {}) {
     const cat = M.category(s.categoryId);
     const isFlow = s.kind === 'out' || s.kind === 'in';
     const parts = [];
-    parts.push(h('div', { class: 'form-top' }, kindSel));
+    parts.push(h('div', { class: 'form-top' }, kindSel,
+      // compra copiada por el atajo de Apple Pay (Más › Registrar desde Apple Pay)
+      isFlow && !isEdit && navigator.clipboard && navigator.clipboard.readText ? h('button', { type: 'button', class: 'chip small paste-btn', onclick: pastePurchase }, '📋 Pegar compra') : null));
     if (isFlow) parts.push(h('div', { class: 'desc-wrap' }, descIn, suggestBox));
     parts.push(h('div', { class: 'amount-row' }, amountIn, h('select', {
       class: 'cur', disabled: !!s.accountId, 'aria-label': 'Moneda', title: s.accountId ? 'La moneda la define la cuenta' : '',

@@ -9,6 +9,8 @@ import { openTxForm } from './add.js';
 import { showCloseMonth } from './close.js';
 import { exportBackup } from './settings.js';
 import { openAccount } from './account.js';
+import { paceCard, netWorthTrend, openNetWorth } from './insights.js';
+import { sparkline } from '../charts.js';
 
 const st = { mode: 'total', ym: null, laterOpen: false, zeroOpen: false, fixedOpen: false };
 
@@ -218,6 +220,7 @@ export function renderHome(root) {
     pendingCard(root),
     monthNav,
     tiles,
+    paceCard(ym, st.mode),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' },
         h('h3', null, 'Gasto por categoría'),
@@ -233,15 +236,17 @@ export function renderHome(root) {
         h('span', { class: 'muted small' }, `Ingresos ${M.fmt(income, base)} · balance ${M.fmt(income - spend.total, base)}`),
         h('a', { class: 'btn small', href: '#/reportes' }, 'Ver mes a mes'))),
     h('section', { class: 'card' },
-      h('div', { class: 'label' }, 'Patrimonio neto'),
-      h('div', { class: 'big' }, M.fmt(nw.total, base)),
+      h('div', { class: 'card-head' },
+        h('div', null, h('div', { class: 'label' }, 'Patrimonio neto'), h('div', { class: 'big' }, M.fmt(nw.total, base))),
+        sparkline(netWorthTrend(13))),                       // tendencia de 12 meses (el detalle, en "Ver evolución")
       h('div', { class: 'breakdown' },
         h('div', null, h('span', null, 'Cuentas'), M.fmt(nw.cash, base)),
         h('div', null, h('span', null, 'Tarjetas'), M.fmt(nw.cards, base)),
         h('div', null, h('span', null, 'Inversiones'), M.fmt(nw.inv, base)),
         h('div', null, h('span', null, 'Deudas'), M.fmt(nw.debts, base)),
         nw.points ? h('div', null, h('span', null, 'Puntos y millas'), M.fmt(nw.points, base)) : null),
-      nw.missing.length ? h('div', { class: 'warn' }, `Falta tipo de cambio de ${nw.missing.join(', ')}; se asumió 1. Actualízalo en Más › Monedas.`) : null),
+      nw.missing.length ? h('div', { class: 'warn' }, `Falta tipo de cambio de ${nw.missing.join(', ')}; se asumió 1. Actualízalo en Más › Monedas.`) : null,
+      h('div', { class: 'card-foot' }, h('span'), h('button', { class: 'btn small', onclick: openNetWorth }, 'Ver evolución'))),
     h('section', { class: 'card' },
       h('h3', null, 'Cuentas'),
       accMain.length ? accMain.map(accRow) : h('p', { class: 'empty' }, 'Sin cuentas con saldo. Agrégalas en Más › Cuentas.'),

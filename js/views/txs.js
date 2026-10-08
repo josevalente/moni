@@ -3,6 +3,7 @@ import * as M from '../model.js';
 import { fill, h, modal } from '../ui.js';
 import { openTxForm } from './add.js';
 import { renderAccount, openAccount } from './account.js';
+import { entryCalendar } from './insights.js';
 
 export function txRow(tx, { showDate = false } = {}) {
   const cat = M.category(tx.categoryId);
@@ -89,6 +90,7 @@ export function renderTxs(root, sub) {
   function draw() {
     const q = state.q.trim();
     const words = q.toLowerCase().split(/\s+/).filter(Boolean).map(text => ({ text, num: /^-?[\d.,]+$/.test(text) && Number.isFinite(M.parseAmount(text)) ? M.parseAmount(text) : null }));
+    fill(cal, q || state.ym !== M.curYm() ? null : entryCalendar());
     fill(chips, h('button', { class: 'chip more', onclick: pickAccount }, '🏦 Por cuenta'),
       ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), 'aria-pressed': String(state.filter === k), onclick: () => { state.filter = k; draw(); } }, l)));
     fill(head, q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [
@@ -124,7 +126,8 @@ export function renderTxs(root, sub) {
     summary.textContent = total ? `${M.fmtInt(total)} mov. · gastos ${M.fmt(sumOut, M.base())} · ingresos ${M.fmt(sumIn, M.base())}` : '';
   }
   const summary = h('div', { class: 'muted center small' });
-  fill(root, h('div', { class: 'toolbar' }, search, chips), head, summary, list);
+  const cal = h('div');
+  fill(root, h('div', { class: 'toolbar' }, search, chips), cal, head, summary, list);
   draw();
   return draw;
 }
