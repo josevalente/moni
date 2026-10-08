@@ -369,3 +369,5 @@ select:disabled { opacity: .65; }
 .sym-results { display: grid; margin-top: 4px; }
 .sym-results .row { min-height: 44px; padding: 6px 2px; }
 .sym-results .title, .sym-results .sub { white-space: normal; }
+.sym-results .ok-note { color: var(--pos); }
+.sym-results .warn-note { color: var(--warn-ink); }

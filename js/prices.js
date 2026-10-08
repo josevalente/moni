@@ -33,7 +33,7 @@ const getJson = async (url) => {
 function tdMessage(j) {
   if (j.code === 401) return 'La clave de Twelve Data no es válida';
   if (j.code === 429) return 'Se alcanzó el límite de consultas por minuto de Twelve Data: espera un minuto';
-  if (j.code === 404 || j.code === 400) return 'Símbolo no encontrado (o no incluido en el plan gratis)';
+  if (j.code === 404 || j.code === 400 || j.code === 403) return 'Símbolo no encontrado o no incluido en el plan gratis';
   return j.message || 'Error de Twelve Data';
 }
 const tdParams = (inv) => `symbol=${encodeURIComponent(inv.symbol)}${inv.mic ? `&mic_code=${encodeURIComponent(inv.mic)}` : ''}`;
@@ -46,9 +46,34 @@ export async function searchSymbols(q, source = 'twelve') {
     const j = await getJson(`${CG}/search?query=${encodeURIComponent(q)}`);
     return (j.coins || []).slice(0, 8).map(c => ({ symbol: c.id, name: `${c.name} (${c.symbol})`, exchange: 'Cripto', currency: 'USD' }));
   }
+  const map = (d) => ({ symbol: d.symbol, mic: d.mic_code, name: d.instrument_name, exchange: `${d.exchange} · ${d.country}`, type: d.instrument_type, currency: d.currency, free: isFreeMic(d.mic_code) });
   const j = await getJson(`${TD}/symbol_search?symbol=${encodeURIComponent(q)}&outputsize=10`);
-  return (j.data || []).map(d => ({ symbol: d.symbol, mic: d.mic_code, name: d.instrument_name, exchange: `${d.exchange} · ${d.country}`, type: d.instrument_type, currency: d.currency }));
+  const syms = new Set((j.data || []).map(d => d.symbol));
+  // "BSANTANDER0", "BSANTANDER1": series internas de la bolsa, no la acción
+  let list = (j.data || []).filter(d => !(/\d$/.test(d.symbol) && syms.has(d.symbol.slice(0, -1)))).map(map);
+  // una acción chilena (u otra bolsa fuera del plan gratis) suele transarse en EE.UU. como ADR: es lo que
+  // compras en Zesty y sí tiene precio gratis. Se busca por el nombre de la empresa.
+  const local = list.find(r => !r.free);
+  if (local && !list.some(r => r.free)) {
+    const name = local.name.replace(/[-.,]/g, ' ').replace(/\b(S ?A|Inc|Corp|ADR|Series \w+|Preferred|Common|Stock)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+    // el nombre completo y, si no aparece, sus dos primeras palabras ("Sociedad Química…" → SQM)
+    for (const qn of [...new Set([name, name.split(' ').slice(0, 2).join(' ')])]) {
+      try {
+        const j2 = await getJson(`${TD}/symbol_search?symbol=${encodeURIComponent(qn)}&outputsize=10`);
+        const adr = (j2.data || []).map(map).filter(r => r.free);
+        if (adr.length) { list = [...adr.map(r => ({ ...r, adr: true })), ...list]; break; }
+      } catch { /* ignore */ }
+    }
+  }
+  // primero lo que tiene precio gratis; sin repetir la misma acción en dos mercados de EE.UU.
+  const seen = new Set();
+  return list.sort((a, b) => (b.free ? 1 : 0) - (a.free ? 1 : 0))
+    .filter(r => { const k = r.free ? r.symbol : r.symbol + r.mic; if (seen.has(k)) return false; seen.add(k); return true; });
 }
+
+// Bolsas de EE.UU.: incluidas en el plan gratis de Twelve Data. Las demás (Santiago, Europa…) requieren plan pagado.
+const US_MICS = new Set(['XNYS', 'XNAS', 'XNGS', 'XNCM', 'XNMS', 'ARCX', 'BATS', 'XASE', 'IEXG', 'XCBO', 'OTCM']);
+export const isFreeMic = (mic) => !mic || US_MICS.has(mic);
 
 async function fetchCurrent(inv) {
   if (inv.priceSource === 'coingecko') {
@@ -128,7 +153,11 @@ async function doRefresh(only, force) {
         }
       }
     } catch (e) {
-      errors.push({ name: inv.name, message: e.message || 'Error' });
+      // bolsa fuera del plan gratis: decir qué hacer en vez de "no encontrado"
+      const msg = !isFreeMic(inv.mic) && e.code !== 401 && e.code !== 429
+        ? 'esa bolsa no está en el plan gratis de Twelve Data. Si la compraste en Zesty, elige su versión en EE.UU. (ADR) en Editar inversión; si no, usa precio manual.'
+        : (e.message || 'Error');
+      errors.push({ name: inv.name, message: msg, paid: !isFreeMic(inv.mic) });
       if (e.code === 401 || e.code === 429) break;          // clave mala o límite: no seguir intentando
     }
   }

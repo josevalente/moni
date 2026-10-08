@@ -4,7 +4,7 @@
 // Actualizaciones atómicas: cada versión se descarga completa al instalarse (saltándose la caché del
 // CDN con ?v=VERSION) y se sirve solo desde su propia caché. Nunca se mezclan archivos de dos versiones.
 // Sube VERSION cada vez que publiques cambios.
-const VERSION = 'moni-v9';
+const VERSION = 'moni-v10';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/db.js', './js/model.js', './js/fx.js', './js/prices.js', './js/ui.js', './js/charts.js',

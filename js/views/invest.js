@@ -253,7 +253,10 @@ function symbolField(state) {
             const curSel = input.closest('form').querySelector('select[data-key="currency"]');
             if (curSel && [...curSel.options].some(o => o.value === r.currency)) curSel.value = r.currency;
             fill(results, h('p', { class: 'muted small' }, `${r.name} · ${r.exchange} · ${r.currency}`));
-          } }, h('div', { class: 'main' }, h('div', { class: 'title' }, `${r.symbol} · ${r.name}`), h('div', { class: 'sub' }, `${r.exchange}${r.type ? ' · ' + r.type : ''} · ${r.currency}`)))) : h('p', { class: 'muted small' }, 'Sin resultados.'));
+          } }, h('div', { class: 'main' }, h('div', { class: 'title' }, `${r.symbol} · ${r.name}`),
+            h('div', { class: 'sub' }, `${r.exchange}${r.type ? ' · ' + r.type : ''} · ${r.currency}`),
+            r.adr ? h('div', { class: 'sub ok-note' }, 'Versión en EE.UU. (ADR, la que se compra en Zesty) · precio gratis · revisa que sea la misma empresa') : null,
+            !r.free ? h('div', { class: 'sub warn-note' }, 'Esta bolsa no está en el plan gratis: usa precio manual') : null))) : h('p', { class: 'muted small' }, 'Sin resultados.'));
         } catch (e) { fill(results, h('p', { class: 'muted small' }, 'No se pudo buscar: ' + e.message)); }
       };
       input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); search(); } });
@@ -299,7 +302,11 @@ function editFund(f) {
       if (v.type === 'units' && converting(v) && price) await PX.setManualPrice(saved, M.todayStr(), Math.abs(price));
       if (v.type === 'units' && v.priceSource !== 'manual') {
         if (v.priceSource === 'twelve' && !PX.getKey()) { askKey(); return; }
-        PX.refreshPrices({ only: saved.id }).then(r => { if (r.errors.length) toast(`${saved.name}: ${r.errors[0].message}`, { ms: 6000 }); });
+        PX.refreshPrices({ only: saved.id }).then(r => {
+          if (!r.errors.length) return;
+          const err = r.errors[0];
+          toast(`${saved.name}: ${err.message}`, err.paid ? { ms: 15000, label: 'Usar precio manual', onAction: () => db.put('investments', { ...db.get('investments', saved.id), priceSource: 'manual' }) } : { ms: 8000 });
+        });
       }
     },
     onDelete: !isNew ? async (v) => {
