@@ -90,7 +90,7 @@ export function renderTxs(root, sub) {
   function draw() {
     const q = state.q.trim();
     const words = q.toLowerCase().split(/\s+/).filter(Boolean).map(text => ({ text, num: /^-?[\d.,]+$/.test(text) && Number.isFinite(M.parseAmount(text)) ? M.parseAmount(text) : null }));
-    fill(cal, q || state.ym !== M.curYm() ? null : entryCalendar());
+    fill(cal, q ? null : entryCalendar(state.ym));
     fill(chips, h('button', { class: 'chip more', onclick: pickAccount }, '🏦 Por cuenta'),
       ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), 'aria-pressed': String(state.filter === k), onclick: () => { state.filter = k; draw(); } }, l)));
     fill(head, q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [

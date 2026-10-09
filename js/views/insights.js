@@ -127,11 +127,14 @@ export function openNetWorth() {
 // Las últimas semanas día por día: más oscuro = más movimientos registrados; los días vacíos quedan
 // marcados para ver qué se olvidó anotar. Un toque abre el día y permite registrar con esa fecha.
 const WEEKS = 12;
-export function entryCalendar() {
+// Cantidad de registros por día: las 12 semanas que terminan hoy o, si se mira un mes pasado, al cierre de ese mes.
+export function entryCalendar(ym = M.curYm()) {
   const today = M.todayStr();
+  const isCur = ym >= M.curYm();
+  const end = isCur ? today : M.monthEnd(ym);
   const dow = (d) => (new Date(d + 'T12:00:00').getDay() + 6) % 7;      // lunes = 0
-  const start = M.addDays(today, -(WEEKS - 1) * 7 - dow(today));
-  const counts = M.entryCounts(start, today);
+  const start = M.addDays(end, -(WEEKS - 1) * 7 - dow(end));
+  const counts = M.entryCounts(start, end);
   const max = Math.max(1, ...counts.values());
   const bin = (n) => (!n ? -1 : Math.min(5, Math.ceil(n / max * 6) - 1));
   const empty = [];
@@ -140,26 +143,34 @@ export function entryCalendar() {
   for (let k = 0; k < WEEKS * 7; k++) {
     const d = M.addDays(start, k);
     const pos = { gridRow: String(dow(d) + 1), gridColumn: String(Math.floor(k / 7) + 2) };
-    if (d > today) { grid.append(h('span', { class: 'cal-cell future', style: pos })); continue; }
+    if (d > end) { grid.append(h('span', { class: 'cal-cell future', style: pos })); continue; }
     const n = counts.get(d) || 0;
     if (!n) empty.push(d);
     const b = bin(n);
     grid.append(h('button', {
-      type: 'button', class: `cal-cell${b < 0 ? ' none' : ' h' + b}${d === today ? ' today' : ''}`,
+      type: 'button', class: `cal-cell${b < 0 ? ' none' : ' h' + b}${d === today ? ' today' : ''}${!isCur && d.slice(0, 7) !== ym ? ' other' : ''}`,
       style: pos,
       'aria-label': `${dLong(d)}: ${n ? `${n} movimiento${n === 1 ? '' : 's'}` : 'sin registros'}`,
       onclick: () => openDay(d),
     }));
   }
+  const dShort = (d) => new Date(d + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+  // resumen del mes mirado: cuántos registros, por día y días vacíos
+  const mFrom = `${ym}-01`, mTo = isCur ? today : M.monthEnd(ym);
+  let mTotal = 0, mEmpty = 0, mN = 0;
+  for (let d = mFrom; d <= mTo; d = M.addDays(d, 1)) { const n = counts.get(d) || 0; mTotal += n; mN++; if (!n) mEmpty++; }
+  const monthName = M.monthName(ym).split(' ')[0].toLowerCase();
   const recent = empty.filter(d => d >= M.addDays(today, -14) && d < today);
+  const perDay = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1 }).format(mN ? mTotal / mN : 0);
+  const summary = `${isCur ? `En ${monthName} van` : `En ${monthName}:`} ${M.fmtInt(mTotal)} registros, ${perDay} por día${mEmpty ? ` y ${mEmpty} día${mEmpty === 1 ? '' : 's'} sin registros` : ', sin días vacíos'}.`;
   return h('section', { class: 'card viz cal-card' },
-    h('div', { class: 'card-head' }, h('div', null, h('h3', null, 'Constancia de registro'),
-      h('div', { class: 'muted small' }, `Últimas ${WEEKS} semanas · más oscuro = más movimientos`))),
+    h('div', { class: 'card-head' }, h('div', null, h('h3', null, 'Cantidad de registros por día'),
+      h('div', { class: 'muted small' }, `${WEEKS} semanas hasta el ${dShort(end)} · más oscuro = más registros`))),
     grid,
     h('div', { class: 'cal-legend muted small' }, h('span', { class: 'cal-cell none' }), ' sin registros', h('span', { class: 'cal-cell h1' }), h('span', { class: 'cal-cell h3' }), h('span', { class: 'cal-cell h5' }), ' más'),
-    h('p', { class: 'small' }, recent.length
-      ? `${recent.length} día${recent.length === 1 ? '' : 's'} sin registros en las últimas dos semanas. Toca un día para revisarlo o registrar con esa fecha.`
-      : 'Sin días vacíos en las últimas dos semanas. Toca un día para ver lo registrado.'));
+    h('p', { class: 'small' }, summary, ' ',
+      isCur && recent.length ? `${recent.length} día${recent.length === 1 ? '' : 's'} vacío${recent.length === 1 ? '' : 's'} en las últimas dos semanas. ` : '',
+      'Toca un día para ver lo registrado o registrar con esa fecha.'));
 }
 
 function openDay(d) {

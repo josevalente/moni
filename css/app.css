@@ -476,3 +476,5 @@ select:disabled { opacity: .65; }
 .sug-row { flex-wrap: wrap; row-gap: 6px; }
 .sug-row .main { flex-basis: 100%; }
 .sug-row .row-actions { margin-left: auto; }
+/* calendario de registros mirando un mes pasado: los días de otros meses, atenuados */
+.cal-cell.other { opacity: .35; }
