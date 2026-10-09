@@ -311,7 +311,8 @@ export function sparkline(values, { width = 72, height = 26 } = {}) {
 // ---- Matriz de calor (categoría × mes) ----------------------------------------------
 // El color compara cada mes con el máximo de esa misma fila (cómo varía la categoría mes a mes).
 // Cada celda muestra su monto: el color nunca es la única forma de leer el valor.
-export function heatTable({ cols, rows, totals, cur, onRow, rowHeader = 'Categoría' }) {
+// anomalías: marca (borde + ▲) los meses que superan 1,5× el mes típico de su fila por al menos `anomalyMin`.
+export function heatTable({ cols, rows, totals, cur, onRow, rowHeader = 'Categoría', anomalyMin = 0 }) {
   // sin símbolo de moneda en las celdas (lo dice el subtítulo): caben más meses en el teléfono
   const fmtC = (v) => (Math.abs(v) < 0.5 ? '–' : compactNumber(v));
   const wrap = h('div', { class: 'heat-wrap' });
@@ -321,13 +322,16 @@ export function heatTable({ cols, rows, totals, cur, onRow, rowHeader = 'Categor
     h('th', { scope: 'col', class: 'heat-total' }, 'Total'));
   const body = rows.map(r => {
     const mx = Math.max(0, ...r.values);
+    const md = anomalyMin > 0 ? M.typicalMonth(r.values) : null;
+    const odd = (v) => md != null && v - md >= anomalyMin && v >= md * 1.5;
     const tr = h('tr', onRow ? { tabindex: '0', class: 'heat-row', onclick: () => onRow(r), onkeydown: (e) => { if (e.key === 'Enter') onRow(r); } } : null,
       h('th', { scope: 'row', class: 'heat-name' },
         h('span', { class: 'heat-label' }, `${r.icon ? r.icon + ' ' : ''}${r.label}`),
         r.sub ? h('small', null, r.sub) : null),
       r.values.map((v, i) => {
         const bin = v > 0 && mx > 0 ? Math.min(5, Math.floor(v / mx * 6 - 1e-9)) : -1;
-        return h('td', { class: bin >= 0 ? `h${bin}` : 'h-none', title: `${r.label} · ${cols[i].long}: ${M.fmt(v, cur)}` }, fmtC(v));
+        const a = odd(v);
+        return h('td', { class: (bin >= 0 ? `h${bin}` : 'h-none') + (a ? ' anom' : ''), title: `${r.label} · ${cols[i].long}: ${M.fmt(v, cur)}${a ? ` · fuera de lo normal (típico ${M.fmt(md, cur)})` : ''}` }, a ? '▲' + fmtC(v) : fmtC(v));
       }),
       h('td', { class: 'heat-total' }, fmtC(r.total)));
     return tr;

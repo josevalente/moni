@@ -2,7 +2,7 @@
 // Sin conexión se usa el último valor guardado (ver model.rateFor) y los movimientos registrados así
 // quedan "pendientes de tipo de cambio" hasta que se pueda consultar el del día.
 import * as db from './db.js';
-import { addDays, base, lastRateDate, rateFor, todayStr } from './model.js';
+import { addDays, base, lastRateDate, rateFor, timeoutSignal, todayStr } from './model.js';
 
 const API = 'https://mindicador.cl/api';
 const MAP = { USD: 'dolar', EUR: 'euro', UF: 'uf', MUSD: 'dolar' };
@@ -37,7 +37,7 @@ async function doRefresh(force) {
       : [`${API}/${code}`];
     for (const url of urls) {
       try {
-        const r = await fetch(url, { cache: 'no-store' });
+        const r = await fetch(url, { cache: 'no-store', signal: timeoutSignal() });
         if (!r.ok) throw new Error(r.status);
         const j = await r.json();
         for (const p of j.serie || []) {

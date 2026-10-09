@@ -28,7 +28,7 @@ export const SOURCES = [
 export const sourceOf = (inv) => (inv.mic === 'XSGO' || inv.priceSource === 'santiago' ? 'santiago' : inv.priceSource);
 
 const getJson = async (url) => {
-  const r = await fetch(url, { cache: 'no-store' });
+  const r = await fetch(url, { cache: 'no-store', signal: M.timeoutSignal() });
   let j = null;
   try { j = await r.json(); } catch { /* ignore */ }
   if (j && j.status === 'error') { const e = new Error(tdMessage(j)); e.code = j.code; throw e; }

@@ -5,8 +5,9 @@ import { fill, h, modal } from '../ui.js';
 import { columnChart, heatTable, vizCard, dataTable, statTiles, compactMoney, lineChart } from '../charts.js';
 import { txRow } from './txs.js';
 import { editCategory } from './settings.js';
+import { healthCard, forecastCard, yoyCard, fixedVarCard } from './analysis.js';
 
-const st = { period: '12', kind: 'expense', mode: 'total', by: 'category', extra: 'all', month: null };
+const st = { view: 'months', period: '12', kind: 'expense', mode: 'total', by: 'category', extra: 'all', money: 'nom', month: null };
 
 // Meses de un período: últimos N meses (incluido el actual) o un año calendario.
 export function monthsOf(period) {
@@ -46,14 +47,43 @@ function filterRow(onChange) {
     ps.length > 1 ? seg('mode', [['total', 'Hogar'], ['mine', 'Mi parte']], 'Alcance') : null,
     // ingresos: con o sin los extraordinarios (herencias, regalos, ventas puntuales)
     st.kind === 'income' ? seg('extra', [['all', 'Todos'], ['rec', 'Recurrentes']], 'Qué ingresos') : null,
-    seg('by', [['category', 'Categorías'], ['group', 'Grupos']], 'Agrupar'));
+    seg('by', [['category', 'Categorías'], ['group', 'Grupos']], 'Agrupar'),
+    // pesos de hoy: cada mes llevado a la UF de hoy, para comparar años sin la inflación
+    seg('money', [['nom', 'Pesos'], ['real', 'Pesos de hoy']], 'Moneda'));
+}
+
+// Pestañas de Reportes: el mes a mes (con filtros) y el análisis para decidir.
+function viewTabs(root) {
+  return h('div', { class: 'seg tabs', role: 'tablist', 'aria-label': 'Vista' }, [['months', 'Mes a mes'], ['analysis', 'Salud y proyección']].map(([v, l]) => h('button', {
+    type: 'button', role: 'tab', class: st.view === v ? 'on' : '', 'aria-selected': String(st.view === v), onclick: () => { st.view = v; renderReports(root); },
+  }, l)));
+}
+
+function renderAnalysis(root) {
+  const ps = M.people();
+  const months = monthsOf('12');
+  const redraw = () => renderAnalysis(root);
+  fill(root,
+    viewTabs(root),
+    ps.length > 1 ? h('div', { class: 'filters' }, h('div', { class: 'seg small', role: 'group', 'aria-label': 'Alcance' }, [['total', 'Hogar'], ['mine', 'Mi parte']].map(([v, l]) => h('button', {
+      type: 'button', class: st.mode === v ? 'on' : '', 'aria-pressed': String(st.mode === v), onclick: () => { st.mode = v; redraw(); },
+    }, l)))) : null,
+    healthCard(),
+    forecastCard(redraw),
+    yoyCard(st.mode),
+    fixedVarCard(months.filter(m => m !== M.curYm()), st.mode));
 }
 
 export function renderReports(root) {
-  try { const k = sessionStorage.getItem('moni.reportKind'); if (k) { st.kind = k; st.month = null; sessionStorage.removeItem('moni.reportKind'); } } catch { /* ignore */ }
+  try {
+    const k = sessionStorage.getItem('moni.reportKind'); if (k) { st.kind = k; st.view = 'months'; st.month = null; sessionStorage.removeItem('moni.reportKind'); }
+    const v = sessionStorage.getItem('moni.reportView'); if (v) { st.view = v; sessionStorage.removeItem('moni.reportView'); }
+  } catch { /* ignore */ }
+  if (st.view === 'analysis') return renderAnalysis(root);
   const months = monthsOf(st.period);
   const base = M.base();
-  const mx = M.categoryMatrix(months, { kind: st.kind, mode: st.mode, by: st.by, extraordinary: st.kind !== 'income' || st.extra === 'all' });
+  const real = st.money === 'real';
+  const mx = M.categoryMatrix(months, { kind: st.kind, mode: st.mode, by: st.by, extraordinary: st.kind !== 'income' || st.extra === 'all', real });
   if (st.month && !months.includes(st.month)) st.month = null;
   const sel = st.month ? months.indexOf(st.month) : -1;
   const isExp = st.kind === 'expense';
@@ -72,24 +102,24 @@ export function renderReports(root) {
 
   const monthly = vizCard({
     title: `${noun} por mes`,
-    subtitle: sel >= 0 ? `Mostrando ${M.monthName(months[sel])} · toca de nuevo para quitar` : `${st.mode === 'mine' ? 'Mi parte' : 'Hogar'} · ${months.length} meses · toca un mes para ver sus movimientos`,
+    subtitle: sel >= 0 ? `Mostrando ${M.monthName(months[sel])} · toca de nuevo para quitar` : `${st.mode === 'mine' ? 'Mi parte' : 'Hogar'} · ${months.length} meses${real ? ' · en pesos de hoy' : ''} · toca un mes para ver sus movimientos`,
     chart: columnChart({
       items, cur: base, reference: avg || null, highlight: sel, ariaLabel: `${noun} por mes. Promedio ${M.fmt(avg, base)}`,
       onPick: (i) => { st.month = st.month === months[i] ? null : months[i]; renderReports(root); },
     }),
     table: dataTable(['Mes', noun, 'Movimientos'], months.map((ym, i) => [M.monthName(ym), M.fmt(mx.totals[i], base), String(mx.counts[i])])),
-    footnote: partial ? 'El último mes está en curso; el promedio considera solo meses cerrados.' : null,
+    footnote: [partial ? 'El último mes está en curso; el promedio considera solo meses cerrados.' : '', real ? 'En pesos de hoy: cada mes multiplicado por la UF de hoy sobre la UF de ese mes.' : ''].filter(Boolean).join(' ') || null,
   });
 
   const cols = months.map((ym, i) => ({ short: M.monthShort(ym).toLowerCase(), long: M.monthName(ym), year: (i === 0 || ym.endsWith('-01')) ? ym.slice(2, 4) : null }));
   const rows = mx.rows.map(r => ({ ...r, sub: `prom. ${compactMoney(r.total / months.length, base)}` }));
   const matrix = vizCard({
     title: `${noun} por ${st.by === 'group' ? 'grupo' : 'categoría'}, mes a mes`,
-    subtitle: `Montos en ${base} · toca una fila para ver su detalle`,
+    subtitle: `Montos en ${base}${real ? ' de hoy' : ''} · toca una fila para ver su detalle`,
     chart: rows.length
-      ? heatTable({ cols, rows, totals: mx.totals, cur: base, rowHeader: st.by === 'group' ? 'Grupo' : 'Categoría', onRow: (r) => openCategoryDetail({ catId: r.catId, group: r.group, kind: st.kind, mode: st.mode, period: st.period }) })
+      ? heatTable({ cols, rows, totals: mx.totals, cur: base, anomalyMin: isExp ? 50000 : 0, rowHeader: st.by === 'group' ? 'Grupo' : 'Categoría', onRow: (r) => openCategoryDetail({ catId: r.catId, group: r.group, kind: st.kind, mode: st.mode, period: st.period }) })
       : h('p', { class: 'empty' }, `Sin ${isExp ? 'gastos' : 'ingresos'} en este período.`),
-    footnote: rows.length ? 'El color compara cada mes con el mayor mes de esa misma fila: muestra cómo varía cada una en el tiempo.' : null,
+    footnote: rows.length ? `El color compara cada mes con el mayor mes de esa misma fila: muestra cómo varía cada una en el tiempo.${isExp ? ' ▲ y borde: un mes de al menos 1,5 veces su mes típico (y $50.000 más).' : ''}` : null,
   });
 
   // movimientos del mes elegido (lo que suma la columna), del más grande al más chico
@@ -109,6 +139,7 @@ export function renderReports(root) {
   })() : null;
 
   fill(root,
+    viewTabs(root),
     filterRow(() => { st.month = null; renderReports(root); }),
     statTiles([
       { label: 'Promedio mensual', value: M.fmt(avg, base) },
@@ -126,9 +157,9 @@ export function renderReports(root) {
 function cashFlowCard(months) {
   const base = M.base();
   const cur = M.curYm();
-  const pid = st.mode === 'mine' ? M.meId() : null;
-  const inc = months.map(ym => M.incomeOfMonth(ym, pid, { extraordinary: false }));
-  const exp = months.map(ym => M.spendingByCategory(ym, st.mode).total);
+  const sv = months.map(ym => M.savingsOfMonth(ym, st.mode));
+  const inc = sv.map(x => x.income);
+  const exp = sv.map(x => x.spend);
   if (!inc.some(Boolean)) return null;
   const closed = months.map((ym, i) => i).filter(i => months[i] !== cur);
   const sumI = closed.reduce((a, i) => a + inc[i], 0), sumE = closed.reduce((a, i) => a + exp[i], 0);
@@ -137,17 +168,17 @@ function cashFlowCard(months) {
   return vizCard({
     title: 'Ingresos y gastos',
     subtitle: `${st.mode === 'mine' ? 'Mi parte' : 'Hogar'} · la distancia entre las líneas es lo que ahorras`,
-    legendItems: [{ name: 'Ingresos recurrentes', color: '--viz-1' }, { name: 'Gastos', color: '--viz-2' }],
+    legendItems: [{ name: 'Ingresos recurrentes', color: '--viz-1' }, { name: 'Consumo', color: '--viz-2' }],
     chart: h('div', null,
       rate != null ? h('p', { class: 'pace-msg' }, `Tasa de ahorro de los meses cerrados: ${pctTxt(rate)} (ahorraste ${M.fmt(sumI - sumE, base)} de ${M.fmt(sumI, base)}).`) : null,
       lineChart({
         points: months.map(ym => ({ short: M.monthShort(ym).toLowerCase(), long: M.monthName(ym), ym })), cur: base,
-        series: [{ name: 'Ingresos recurrentes', values: inc, color: '--viz-1' }, { name: 'Gastos', values: exp, color: '--viz-2' }],
+        series: [{ name: 'Ingresos recurrentes', values: inc, color: '--viz-1' }, { name: 'Consumo', values: exp, color: '--viz-2' }],
         extra: (i) => [{ value: M.fmt(inc[i] - exp[i], base, { sign: true }), label: inc[i] ? `Ahorro (${pctTxt((inc[i] - exp[i]) / inc[i])})` : 'Ahorro' }],
         ariaLabel: `Ingresos y gastos por mes; tasa de ahorro ${rate != null ? pctTxt(rate) : '—'}`,
       })),
-    table: dataTable(['Mes', 'Ingresos recurrentes', 'Gastos', 'Ahorro'], months.map((ym, i) => [M.monthName(ym), M.fmt(inc[i], base), M.fmt(exp[i], base), M.fmt(inc[i] - exp[i], base, { sign: true })]).reverse()),
-    footnote: 'Ingresos sin los extraordinarios (herencias, regalos). Gastos sin inversiones ni la parte de los dividendos hipotecarios que amortiza el crédito. Si un mes se ve raro, tócalo arriba en el gráfico de columnas para ver sus movimientos.',
+    table: dataTable(['Mes', 'Ingresos recurrentes', 'Consumo', 'Ahorro'], months.map((ym, i) => [M.monthName(ym), M.fmt(inc[i], base), M.fmt(exp[i], base), M.fmt(inc[i] - exp[i], base, { sign: true })]).reverse()),
+    footnote: 'Ingresos sin los extraordinarios (herencias, regalos). El consumo no cuenta como gasto lo que en realidad es ahorro: los aportes a una inversión asociada a su categoría (como la AFP) ni la parte de los dividendos que amortiza el crédito. Si un mes se ve raro, tócalo arriba en el gráfico de columnas para ver sus movimientos.',
   });
 }
 
@@ -156,7 +187,7 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
   const base = M.base();
   const cat = catId ? M.category(catId) : null;
   const title = cat ? `${cat.icon ? cat.icon + ' ' : ''}${cat.name}` : (group || 'Detalle');
-  const ds = { period, month: null, limit: 80 };
+  const ds = { period, month: null, limit: 80, desc: null };
   const body = h('div');
   const inGroup = (t) => { const c = M.category(t.categoryId); return c && (c.group || 'Otras') === group; };
   const mine = (t) => (t.kind === 'out' || t.kind === 'in') && (catId ? (M.category(t.categoryId) || {}).id === catId : inGroup(t));
@@ -185,10 +216,23 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
     }));
     // movimientos de la categoría (o del grupo) en el período, o en el mes elegido
     // incluye las categorías combinadas en esta (sus movimientos ya suman aquí en la matriz)
-    const txs = M.sortTx(db.all('tx').filter(t => mine(t)
+    const allTxs = M.sortTx(db.all('tx').filter(t => mine(t)
       && (sel >= 0 ? t.date.slice(0, 7) === months[sel] : t.date.slice(0, 7) >= months[0])));
+    // de qué está hecha: los movimientos agrupados por descripción (sirve sobre todo en "Otros")
+    const groups = M.byDescription(allTxs);
+    if (ds.desc && !groups.some(g => g.label === ds.desc)) ds.desc = null;
+    const txs = ds.desc ? groups.find(g => g.label === ds.desc).txs : allTxs;
+    const gTotal = groups.reduce((a, g) => a + Math.max(0, g.total), 0);
+    const madeOf = groups.length >= 3 && allTxs.length >= 5 && gTotal > 0 ? h('section', { class: 'made-of' },
+      h('h4', null, 'De qué está hecha'),
+      h('p', { class: 'muted small' }, 'Movimientos agrupados por las primeras palabras de su descripción. Toca uno para ver solo esos.'),
+      groups.slice(0, 8).map(g => h('button', { type: 'button', class: 'made-row' + (ds.desc === g.label ? ' on' : ''), 'aria-pressed': String(ds.desc === g.label), onclick: () => { ds.desc = ds.desc === g.label ? null : g.label; ds.limit = 80; draw(); } },
+        h('span', { class: 'made-name' }, g.label, h('small', null, ` · ${M.fmtInt(g.count)} mov.`)),
+        h('span', { class: 'made-track', 'aria-hidden': 'true' }, h('span', { style: { width: Math.max(0, g.total) / gTotal * 100 + '%' } })),
+        h('span', { class: 'made-val' }, M.fmt(g.total, base)))),
+      groups.length > 8 ? h('p', { class: 'muted small' }, `Y ${M.fmtInt(groups.length - 8)} descripciones más.`) : null) : null;
     const periodSeg = h('div', { class: 'seg small', role: 'group', 'aria-label': 'Período' }, [['6', '6 m'], ['12', '12 m'], ['24', '24 m'], ['60', '5 años'], ['all', 'Todo']].map(([v, l]) => h('button', {
-      type: 'button', class: ds.period === v ? 'on' : '', 'aria-pressed': String(ds.period === v), onclick: () => { ds.period = v; ds.month = null; ds.limit = 80; draw(); },
+      type: 'button', class: ds.period === v ? 'on' : '', 'aria-pressed': String(ds.period === v), onclick: () => { ds.period = v; ds.month = null; ds.desc = null; ds.limit = 80; draw(); },
     }, l)));
     const catNow = catId ? M.category(catId) : null;
     fill(body,
@@ -211,7 +255,9 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
         }),
         table: dataTable(['Mes', 'Monto', 'Movimientos'], months.map((ym, i) => [M.monthName(ym), M.fmt(values[i], base), String(counts[i])])),
       }),
-      h('h4', null, sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : `Movimientos (${M.fmtInt(txs.length)})`),
+      madeOf,
+      h('h4', null, `${sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : 'Movimientos'}${ds.desc ? ` · "${ds.desc}"` : ''} (${M.fmtInt(txs.length)})`),
+      ds.desc ? h('button', { class: 'btn small', type: 'button', onclick: () => { ds.desc = null; draw(); } }, 'Ver todos') : null,
       txs.length ? txs.slice(0, ds.limit).map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Sin movimientos.'),
       txs.length > ds.limit ? h('div', { class: 'center' }, h('button', { class: 'btn', type: 'button', onclick: () => { ds.limit += 200; draw(); } },
         `Ver más (${M.fmtInt(ds.limit)} de ${M.fmtInt(txs.length)})`)) : null);

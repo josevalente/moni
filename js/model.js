@@ -14,6 +14,8 @@ export function addMonths(ym, n) {
   const t = y * 12 + (m - 1) + n;
   return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
 }
+// consultas a internet con tiempo límite: con mala señal no quedan colgadas para siempre
+export const timeoutSignal = (ms = 15000) => (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined);
 export const addDays = (date, n) => new Date(Date.parse(date + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 export const monthName = (ym) => `${MESES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
@@ -775,6 +777,170 @@ export function returnsVsInflation() {
   return out.sort((a, b) => b.real - a.real);
 }
 
+// ---- Análisis: ahorro real, proyección de caja, indicadores, comparaciones -------------------------
+
+// Pesos de hoy: un monto de un mes pasado × (UF de hoy / UF de ese mes). Permite comparar años sin la inflación.
+export function realFactor(ym) {
+  const now = rateFor('UF', todayStr()), then = rateFor('UF', ym === curYm() ? todayStr() : monthEnd(ym));
+  return now && then ? now / then : 1;
+}
+const median = (vals) => { const v = [...vals].sort((a, b) => a - b); const k = v.length; return k ? (k % 2 ? v[(k - 1) / 2] : (v[k / 2 - 1] + v[k / 2]) / 2) : 0; };
+
+// Ahorro de un mes = ingresos recurrentes − consumo. Lo que hoy figura como gasto pero es ahorro cuenta como
+// ahorro: los aportes a una inversión asociada a su categoría (ej. la AFP) y la amortización de los créditos
+// (que ya no está en el gasto). "mine" = mi parte.
+export function savingsOfMonth(ym, mode = 'total') {
+  const ps = people();
+  const { pct } = splitFor(ym);
+  const me = meId();
+  const income = incomeOfMonth(ym, mode === 'mine' ? me : null, { extraordinary: false });
+  let spend = 0, invest = 0, amort = 0;
+  for (const tx of txsInMonth(ym)) {
+    if (tx.kind !== 'out' && tx.kind !== 'in') continue;
+    const cat = category(tx.categoryId);
+    if (!cat || cat.kind !== 'expense') continue;
+    let b = txBase(tx) * (tx.kind === 'in' ? -1 : 1);
+    if (mode === 'mine') {
+      const sh = shares(tx, cat, pct, ps);
+      if (sh) b *= (sh[me] || 0); else if (tx.paidBy !== me) continue;
+    }
+    if (cat.invId) { invest += b; continue; }
+    const a = cat.debtId ? amortShare(tx, cat) : 0;
+    amort += b * a;
+    spend += b * (1 - a);
+  }
+  const saved = income - spend;
+  return { ym, income, spend, invest, amort, saved, rate: income ? saved / income : null };
+}
+
+// Proyección de caja de los próximos meses para las cuentas del dueño:
+// - ingresos: la mediana mensual de los recurrentes, más los ingresos grandes que se repiten cada año (ej. un
+//   reparto de utilidades en mayo) en el mismo mes que el año pasado;
+// - gasto propio: el promedio de los últimos 12 meses (incluye contribuciones e impuestos anuales), sin los
+//   dividendos, que van exactos según la tabla de cada crédito (en UF, con la UF al ritmo del último año);
+// - si se indica, un arriendo. Parte con la liquidez de hoy (cuentas menos tarjetas).
+export function cashForecast({ months = 12, rent = null } = {}) {
+  const cur = curYm();
+  const owner = ownerId();
+  const closed = monthsBetween(addMonths(cur, -12), addMonths(cur, -1));
+  const debtCats = new Set(db.all('categories').filter(c => c.debtId).map(c => c.id));
+  const ownSpend = (ym) => {
+    const r = spendingByCategory(ym, 'mine', owner);
+    // sin los dividendos (van exactos aparte); la AFP y otros aportes sí quedan: también salen de la cuenta
+    return r.total - r.rows.filter(x => debtCats.has(x.cat.id)).reduce((a, x) => a + x.v, 0);
+  };
+  const incSeries = closed.map(ym => incomeOfMonth(ym, owner, { extraordinary: false }));
+  const incomeBase = median(incSeries);
+  const lumps = new Map();
+  closed.forEach((ym, i) => { const extra = incSeries[i] - incomeBase; if (extra > Math.max(incomeBase, 1)) lumps.set(ym.slice(5), extra); });
+  const spendBase = closed.reduce((a, ym) => a + ownSpend(ym), 0) / closed.length;
+  const today = todayStr();
+  const uf0 = rateFor('UF', today) || 1, uf12 = rateFor('UF', addDays(today, -365)) || uf0;
+  const g = Math.pow(uf0 / uf12, 1 / 12);
+  const bal0 = accountBalances();
+  let liquid = 0;
+  for (const a of accounts()) if (currencyInfo(a.currency).convertible !== false) liquid += (bal0.get(a.id) || 0) * (rateFor(a.currency, today) ?? 1);
+  const mortgages = db.all('debts').filter(d => d.mortgage && !d.archived);
+  const rows = [];
+  let balance = liquid;
+  for (let k = 1; k <= months; k++) {
+    const ym = addMonths(cur, k);
+    const uf = uf0 * Math.pow(g, k);
+    const dividends = [];
+    for (const d of mortgages) {
+      const n0 = cuotasPaid(d, monthEnd(addMonths(ym, -1))), n1 = cuotasPaid(d, monthEnd(ym));
+      let amt = 0;
+      for (let n = n0 + 1; n <= n1; n++) amt += d.mortgage.rows[n - 1][6];
+      const rate = d.currency === 'UF' ? uf : (rateFor(d.currency, today) ?? 1);
+      if (amt) dividends.push({ name: d.name, amount: amt * rate });
+    }
+    const div = dividends.reduce((a, x) => a + x.amount, 0);
+    const rentNet = rent && rent.uf && ym >= rent.from ? rent.uf * uf * (1 - (rent.adminPct || 0) / 100) : 0;
+    const spend = spendBase * (uf / uf0);                       // el gasto sube con la inflación
+    const income = incomeBase + (lumps.get(ym.slice(5)) || 0);
+    const net = income - spend - div + rentNet;
+    balance += net;
+    rows.push({ ym, income, lump: lumps.get(ym.slice(5)) || 0, spend, dividends, div, rent: rentNet, net, balance });
+  }
+  const yearIncome = incSeries.reduce((a, v) => a + v, 0);
+  return { incomeBase, yearIncome, lumps: [...lumps.entries()], spendBase, liquid, inflation: Math.pow(g, 12) - 1, rows };
+}
+
+// Indicadores de salud financiera con su referencia (tasa de ahorro, fondo de emergencia, carga de los
+// dividendos sobre el ingreso —la que miran los bancos en Chile— y endeudamiento sobre los activos).
+export function healthIndicators() {
+  const cur = curYm();
+  const months = monthsBetween(addMonths(cur, -12), addMonths(cur, -1));
+  const sv = months.map(ym => savingsOfMonth(ym, 'mine'));
+  const inc = sv.reduce((a, x) => a + x.income, 0), saved = sv.reduce((a, x) => a + x.saved, 0);
+  const fc = cashForecast({ months: 3 });
+  const nextDiv = median(fc.rows.map(r => r.div));                // dividendo de un mes normal (sin la 1ª cuota)
+  const monthlyOut = fc.spendBase + nextDiv;
+  const nw = netWorth();
+  const assets = nw.cash + nw.inv + nw.props + Math.max(0, nw.points);
+  const debts = -nw.cards - nw.debts;
+  return {
+    savings: { value: inc ? saved / inc : null, saved, income: inc, invest: sv.reduce((a, x) => a + x.invest, 0), amort: sv.reduce((a, x) => a + x.amort, 0) },
+    emergency: { value: monthlyOut ? Math.max(0, fc.liquid) / monthlyOut : null, liquid: fc.liquid, monthly: monthlyOut },
+    // sobre el ingreso mensual promedio del año (incluye un reparto anual); también solo con el ingreso fijo
+    mortgage: { value: fc.yearIncome ? nextDiv / (fc.yearIncome / 12) : null, dividend: nextDiv, income: fc.yearIncome / 12, fixedOnly: fc.incomeBase ? nextDiv / fc.incomeBase : null },
+    leverage: { value: assets ? debts / assets : null, debts, assets },
+  };
+}
+
+// Este año contra el anterior, categoría por categoría, en los mismos meses ya cerrados; en pesos de hoy
+// (UF) para que la inflación no haga parecer que todo subió.
+export function yearOverYear({ kind = 'expense', mode = 'total', real = true } = {}) {
+  const cur = curYm();
+  const y = cur.slice(0, 4), lastMonth = addMonths(cur, -1);
+  if (lastMonth.slice(0, 4) !== y) return null;
+  const a = monthsBetween(`${y}-01`, lastMonth), b = a.map(ym => addMonths(ym, -12));
+  const A = categoryMatrix(a, { kind, mode, real }), B = categoryMatrix(b, { kind, mode, real });
+  const prev = new Map(B.rows.map(r => [r.key, r]));
+  const keys = new Set([...A.rows.map(r => r.key), ...B.rows.map(r => r.key)]);
+  const rows = [...keys].map(k => {
+    const x = A.rows.find(r => r.key === k), z = prev.get(k);
+    return { key: k, label: (x || z).label, icon: (x || z).icon, catId: (x || z).catId, now: x ? x.total : 0, before: z ? z.total : 0 };
+  }).map(r => ({ ...r, diff: r.now - r.before })).sort((p, q) => Math.abs(q.diff) - Math.abs(p.diff));
+  const now = A.totals.reduce((s, v) => s + v, 0), before = B.totals.reduce((s, v) => s + v, 0);
+  return { months: a, prevMonths: b, rows, now, before, real };
+}
+
+// Mes típico de una categoría: la mediana de los meses en que hubo gasto (así una categoría nueva o una que se
+// paga cada tres meses no se ve "fuera de lo normal" cada vez). Con menos de 3 meses no hay historia suficiente.
+export function typicalMonth(values) {
+  const v = values.filter(x => x > 0);
+  return v.length >= 3 ? median(v) : null;
+}
+
+// Gastos fuera de lo normal en un mes: categorías que ya superan claramente su mes típico de los 12 meses
+// anteriores (1,5 veces y al menos minExcess más).
+export function unusualSpending(ym, mode = 'total', { minExcess = 50000 } = {}) {
+  const prev = monthsBetween(addMonths(ym, -12), addMonths(ym, -1));
+  const mx = categoryMatrix([...prev, ym], { mode });
+  const out = [];
+  for (const r of mx.rows) {
+    const typical = typicalMonth(r.values.slice(0, 12));
+    if (typical == null) continue;
+    const now = r.values[12];
+    const excess = now - typical;
+    if (excess >= minExcess && now >= typical * 1.5) out.push({ catId: r.catId, label: r.label, icon: r.icon, now, typical, excess });
+  }
+  return out.sort((a, b) => b.excess - a.excess);
+}
+
+// De qué está hecha una categoría: sus movimientos agrupados por descripción (útil para "Otros").
+export function byDescription(txs) {
+  const m = new Map();
+  for (const t of txs) {
+    const k = normKey(t.desc || '').replace(/[^a-zñ ]+/g, ' ').split(' ').filter(Boolean).slice(0, 3).join(' ') || '(sin descripción)';
+    const e = m.get(k) || { label: k, total: 0, count: 0, txs: [] };
+    e.total += txBase(t) * (t.kind === 'in' ? -1 : 1); e.count++; e.txs.push(t);
+    m.set(k, e);
+  }
+  return [...m.values()].sort((a, b) => b.total - a.total);
+}
+
 // ---- Asistentes: sugerencias por descripción --------------------------------
 
 // quita tildes pero conserva la ñ ("pañales" no debe coincidir con "pantalones")
@@ -1222,7 +1388,8 @@ export function txYears() {
 
 // Matriz categoría (o grupo) × mes en moneda base, para los reportes.
 // kind 'expense' | 'income' · mode 'total' (hogar) | 'mine' (mi parte) · by 'category' | 'group'
-export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 'category', pid = null, extraordinary = true } = {}) {
+export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 'category', pid = null, extraordinary = true, real = false } = {}) {
+  const realF = real ? months.map(realFactor) : null;
   const idx = new Map(months.map((m, i) => [m, i]));
   const ps = people();
   const me = pid || meId();
@@ -1240,7 +1407,7 @@ export function categoryMatrix(months, { kind = 'expense', mode = 'total', by = 
     if (kind === 'income' && tx.kind !== 'in') continue;
     if (!extraordinary && cat.extraordinary) continue;
     // en gastos, una devolución (ingreso en una categoría de gasto) resta
-    let v = txBase(tx) * (kind === 'expense' && tx.kind === 'in' ? -1 : 1) * (kind === 'expense' ? expenseFactor(tx, cat) : 1);
+    let v = txBase(tx) * (kind === 'expense' && tx.kind === 'in' ? -1 : 1) * (kind === 'expense' ? expenseFactor(tx, cat) : 1) * (realF ? realF[i] : 1);
     if (mode === 'mine') {
       if (kind === 'income') { if (tx.paidBy !== me) continue; } else {
         const sh = shares(tx, cat, pctOf(months[i]), ps);

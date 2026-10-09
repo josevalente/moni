@@ -427,3 +427,36 @@ select:disabled { opacity: .65; }
 .rent { display: grid; gap: 4px; }
 .rent-line { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
 .rent-line.strong { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 2px; font-size: 15px; }
+.heat td.anom { box-shadow: inset 0 0 0 2px var(--ink); font-weight: 700; }
+
+/* ---- Análisis: salud, proyección, este año vs el anterior ---------------------------------- */
+.seg.tabs { display: flex; width: 100%; margin-bottom: 10px; }
+.seg.tabs button { flex: 1; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+.health-item { border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: grid; gap: 4px; align-content: start; }
+.health-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 6px; align-items: baseline; }
+.health-title { font-size: 13px; color: var(--muted); }
+.health-badge { font-size: 12px; font-weight: 700; border-radius: 99px; padding: 1px 8px; white-space: nowrap; }
+.health-item.is-good .health-badge { color: var(--pos); box-shadow: inset 0 0 0 1px var(--pos); }
+.health-item.is-warn .health-badge { background: var(--warn); color: var(--warn-ink); }
+.health-item.is-bad .health-badge { color: var(--neg); box-shadow: inset 0 0 0 1px var(--neg); }
+.health-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.health-detail { font-size: 13px; }
+.health-ref { font-size: 12px; color: var(--muted); }
+.fc-scen { margin-top: 10px; display: grid; gap: 8px; }
+.fc-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fc-field { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+.fc-field input { width: 100%; min-width: 0; }
+.div-row.yoy, .made-row { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; width: 100%; cursor: pointer; }
+.div-row.yoy { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto; }
+.alert-card { border-color: var(--neg); color: inherit; text-decoration: none; }
+.alert-card .title { font-weight: 700; margin-bottom: 2px; }
+.made-of { margin-top: 6px; }
+.made-of p { margin: 0 0 6px; }
+.made-row { display: grid; grid-template-columns: minmax(0, 1.3fr) 1fr auto; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.made-row.on .made-name { color: var(--brand); }
+.made-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.made-name small { color: var(--muted); font-weight: 400; }
+.made-track { height: 10px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.made-track span { display: block; height: 100%; background: var(--viz-1); border-radius: 3px; }
+.made-val { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }

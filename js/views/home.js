@@ -11,6 +11,7 @@ import { exportBackup } from './settings.js';
 import { openAccount } from './account.js';
 import { paceCard, netWorthTrend, openNetWorth } from './insights.js';
 import { sparkline } from '../charts.js';
+import { unusualCard, forecastAlert } from './analysis.js';
 
 const st = { mode: 'total', ym: null, laterOpen: false, zeroOpen: false, fixedOpen: false };
 
@@ -239,7 +240,9 @@ export function renderHome(root) {
     pendingCard(root),
     monthNav,
     tiles,
+    ym === M.curYm() ? forecastAlert() : null,
     paceCard(ym, st.mode),
+    unusualCard(ym, st.mode),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' },
         h('h3', null, 'Gasto por categoría'),
