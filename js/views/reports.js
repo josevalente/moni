@@ -65,11 +65,12 @@ function renderAnalysis(root) {
   const redraw = () => renderAnalysis(root);
   fill(root,
     viewTabs(root),
-    ps.length > 1 ? h('div', { class: 'filters' }, h('div', { class: 'seg small', role: 'group', 'aria-label': 'Alcance' }, [['total', 'Hogar'], ['mine', 'Mi parte']].map(([v, l]) => h('button', {
-      type: 'button', class: st.mode === v ? 'on' : '', 'aria-pressed': String(st.mode === v), onclick: () => { st.mode = v; redraw(); },
-    }, l)))) : null,
     healthCard(),
     forecastCard(redraw),
+    h('div', { class: 'section-head' }, h('h4', null, 'Tu gasto en el tiempo'),
+      ps.length > 1 ? h('div', { class: 'seg small', role: 'group', 'aria-label': 'Alcance' }, [['total', 'Hogar'], ['mine', 'Mi parte']].map(([v, l]) => h('button', {
+        type: 'button', class: st.mode === v ? 'on' : '', 'aria-pressed': String(st.mode === v), onclick: () => { st.mode = v; redraw(); },
+      }, l))) : null),
     yoyCard(st.mode),
     fixedVarCard(months.filter(m => m !== M.curYm()), st.mode));
 }
@@ -117,9 +118,9 @@ export function renderReports(root) {
     title: `${noun} por ${st.by === 'group' ? 'grupo' : 'categoría'}, mes a mes`,
     subtitle: `Montos en ${base}${real ? ' de hoy' : ''} · toca una fila para ver su detalle`,
     chart: rows.length
-      ? heatTable({ cols, rows, totals: mx.totals, cur: base, anomalyMin: isExp ? 50000 : 0, rowHeader: st.by === 'group' ? 'Grupo' : 'Categoría', onRow: (r) => openCategoryDetail({ catId: r.catId, group: r.group, kind: st.kind, mode: st.mode, period: st.period }) })
+      ? heatTable({ cols, rows, totals: mx.totals, cur: base, anomalyMin: isExp ? 50000 : 0, partialIdx: months.indexOf(cur), rowHeader: st.by === 'group' ? 'Grupo' : 'Categoría', onRow: (r) => openCategoryDetail({ catId: r.catId, group: r.group, kind: st.kind, mode: st.mode, period: st.period }) })
       : h('p', { class: 'empty' }, `Sin ${isExp ? 'gastos' : 'ingresos'} en este período.`),
-    footnote: rows.length ? `El color compara cada mes con el mayor mes de esa misma fila: muestra cómo varía cada una en el tiempo.${isExp ? ' ▲ y borde: un mes de al menos 1,5 veces su mes típico (y $50.000 más).' : ''}` : null,
+    footnote: rows.length ? `El color compara cada mes con el mayor mes de esa misma fila: muestra cómo varía cada una en el tiempo.${isExp ? ' Borde rojo: un mes fuera de lo normal, de al menos 1,5 veces su mes típico y $50.000 más.' : ''}` : null,
   });
 
   // movimientos del mes elegido (lo que suma la columna), del más grande al más chico
@@ -220,16 +221,17 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
       && (sel >= 0 ? t.date.slice(0, 7) === months[sel] : t.date.slice(0, 7) >= months[0])));
     // de qué está hecha: los movimientos agrupados por descripción (sirve sobre todo en "Otros")
     const groups = M.byDescription(allTxs);
-    if (ds.desc && !groups.some(g => g.label === ds.desc)) ds.desc = null;
-    const txs = ds.desc ? groups.find(g => g.label === ds.desc).txs : allTxs;
+    const pick = ds.desc ? groups.find(g => g.key === ds.desc) : null;
+    if (!pick) ds.desc = null;
+    const txs = pick ? pick.txs : allTxs;
     const gTotal = groups.reduce((a, g) => a + Math.max(0, g.total), 0);
     const madeOf = groups.length >= 3 && allTxs.length >= 5 && gTotal > 0 ? h('section', { class: 'made-of' },
       h('h4', null, 'De qué está hecha'),
       h('p', { class: 'muted small' }, 'Movimientos agrupados por las primeras palabras de su descripción. Toca uno para ver solo esos.'),
-      groups.slice(0, 8).map(g => h('button', { type: 'button', class: 'made-row' + (ds.desc === g.label ? ' on' : ''), 'aria-pressed': String(ds.desc === g.label), onclick: () => { ds.desc = ds.desc === g.label ? null : g.label; ds.limit = 80; draw(); } },
-        h('span', { class: 'made-name' }, g.label, h('small', null, ` · ${M.fmtInt(g.count)} mov.`)),
-        h('span', { class: 'made-track', 'aria-hidden': 'true' }, h('span', { style: { width: Math.max(0, g.total) / gTotal * 100 + '%' } })),
-        h('span', { class: 'made-val' }, M.fmt(g.total, base)))),
+      groups.slice(0, 8).map(g => h('button', { type: 'button', class: 'made-row' + (ds.desc === g.key ? ' on' : ''), 'aria-pressed': String(ds.desc === g.key), onclick: () => { ds.desc = ds.desc === g.key ? null : g.key; ds.limit = 80; draw(); } },
+        h('span', { class: 'made-name' }, g.label, g.count > 1 ? h('small', null, ` · ${M.fmtInt(g.count)} veces`) : null),
+        h('span', { class: 'made-val' }, M.fmt(g.total, base)),
+        h('span', { class: 'made-track', 'aria-hidden': 'true' }, h('span', { style: { width: Math.max(0, g.total) / gTotal * 100 + '%' } })))),
       groups.length > 8 ? h('p', { class: 'muted small' }, `Y ${M.fmtInt(groups.length - 8)} descripciones más.`) : null) : null;
     const periodSeg = h('div', { class: 'seg small', role: 'group', 'aria-label': 'Período' }, [['6', '6 m'], ['12', '12 m'], ['24', '24 m'], ['60', '5 años'], ['all', 'Todo']].map(([v, l]) => h('button', {
       type: 'button', class: ds.period === v ? 'on' : '', 'aria-pressed': String(ds.period === v), onclick: () => { ds.period = v; ds.month = null; ds.desc = null; ds.limit = 80; draw(); },
@@ -256,7 +258,7 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
         table: dataTable(['Mes', 'Monto', 'Movimientos'], months.map((ym, i) => [M.monthName(ym), M.fmt(values[i], base), String(counts[i])])),
       }),
       madeOf,
-      h('h4', null, `${sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : 'Movimientos'}${ds.desc ? ` · "${ds.desc}"` : ''} (${M.fmtInt(txs.length)})`),
+      h('h4', null, `${sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : 'Movimientos'}${pick ? ` · "${pick.label}"` : ''} (${M.fmtInt(txs.length)})`),
       ds.desc ? h('button', { class: 'btn small', type: 'button', onclick: () => { ds.desc = null; draw(); } }, 'Ver todos') : null,
       txs.length ? txs.slice(0, ds.limit).map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Sin movimientos.'),
       txs.length > ds.limit ? h('div', { class: 'center' }, h('button', { class: 'btn', type: 'button', onclick: () => { ds.limit += 200; draw(); } },

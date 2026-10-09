@@ -933,8 +933,10 @@ export function unusualSpending(ym, mode = 'total', { minExcess = 50000 } = {}) 
 export function byDescription(txs) {
   const m = new Map();
   for (const t of txs) {
-    const k = normKey(t.desc || '').replace(/[^a-zñ ]+/g, ' ').split(' ').filter(Boolean).slice(0, 3).join(' ') || '(sin descripción)';
-    const e = m.get(k) || { label: k, total: 0, count: 0, txs: [] };
+    const k = normKey(t.desc || '').replace(/[^a-zñ ]+/g, ' ').split(' ').filter(Boolean).slice(0, 3).join(' ');
+    // se muestra como se escribió la primera vez (con tildes y mayúsculas)
+    const label = String(t.desc || '').replace(/[^\p{L} ]+/gu, ' ').split(' ').filter(Boolean).slice(0, 3).join(' ');
+    const e = m.get(k) || { key: k, label: k ? label : '(sin descripción)', total: 0, count: 0, txs: [] };
     e.total += txBase(t) * (t.kind === 'in' ? -1 : 1); e.count++; e.txs.push(t);
     m.set(k, e);
   }

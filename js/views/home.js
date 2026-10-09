@@ -259,6 +259,7 @@ export function renderHome(root) {
           ? `Ingresos ${M.fmt(income - extraIncome, base)} (+ ${M.fmt(extraIncome, base)} extraordinarios) · balance ${M.fmt(income - extraIncome - spend.total, base)}`
           : `Ingresos ${M.fmt(income, base)} · balance ${M.fmt(income - spend.total, base)}`),
         h('a', { class: 'btn small', href: '#/reportes' }, 'Ver mes a mes'))),
+    incomeCard(ym, base),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' },
         h('div', null, h('div', { class: 'label' }, 'Patrimonio neto'), h('div', { class: 'big' }, M.fmt(nw.total, base))),
@@ -278,7 +279,6 @@ export function renderHome(root) {
       accZero.length ? h('button', { class: 'link-row', onclick: () => { st.zeroOpen = !st.zeroOpen; renderHome(root); } },
         st.zeroOpen ? 'Ocultar las cuentas en cero' : `${accZero.length} cuentas en cero`) : null,
       st.zeroOpen ? accZero.map(accRow) : null),
-    incomeCard(ym, base),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' }, h('h3', null, 'Últimos movimientos'), h('a', { href: '#/movs' }, 'Ver todos')),
       recents.length ? recents.map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Toca ＋ para registrar tu primer movimiento.')));

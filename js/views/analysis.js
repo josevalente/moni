@@ -21,26 +21,29 @@ export function healthCard() {
     const g = lowerIsBetter ? v <= good : v >= good, o = lowerIsBetter ? v <= ok : v >= ok;
     return g ? { cls: 'is-good', icon: '✓', l: 'Bien' } : o ? { cls: 'is-warn', icon: '!', l: 'Atención' } : { cls: 'is-bad', icon: '✕', l: 'Riesgo' };
   };
-  const item = (title, value, lv, detail, ref) => h('div', { class: 'health-item ' + (lv ? lv.cls : '') },
+  // montos compactos: la tarjeta se lee de un vistazo; el detalle exacto está en cada reporte
+  const c = (v) => compactMoney(v, base);
+  const item = (title, value, lv, detail, ref, hint) => h('div', { class: 'health-item ' + (lv ? lv.cls : '') },
     h('div', { class: 'health-top' }, h('span', { class: 'health-title' }, title), lv ? h('span', { class: 'health-badge' }, `${lv.icon} ${lv.l}`) : null),
     h('div', { class: 'health-value' }, value),
     h('div', { class: 'health-detail' }, detail),
+    lv && lv.cls !== 'is-good' && hint ? h('div', { class: 'health-hint' }, hint) : null,
     h('div', { class: 'health-ref' }, ref));
   const s = hi.savings, e = hi.emergency, m = hi.mortgage, l = hi.leverage;
   return h('section', { class: 'card health' },
     h('div', { class: 'card-head' }, h('div', null, h('h3', null, 'Salud financiera'), h('div', { class: 'muted small' }, 'Últimos 12 meses · tu parte'))),
     h('div', { class: 'health-grid' },
       item('Tasa de ahorro', pct(s.value), level(s.value, 0.2, 0.1),
-        `Ahorraste ${M.fmt(s.saved, base)} de ${M.fmt(s.income, base)}; incluye AFP (${M.fmt(s.invest, base)}) y amortización de créditos (${M.fmt(s.amort, base)}).`,
-        'Referencia: 20% o más.'),
+        `${c(s.saved)} de ${c(s.income)}. Cuenta como ahorro la AFP (${c(s.invest)}) y lo que amortizas de los créditos (${c(s.amort)}).`,
+        'Referencia: 20% o más.', 'Revisa en "Este año vs el anterior" qué categorías subieron.'),
       item('Fondo de emergencia', e.value == null ? '—' : months1(e.value), level(e.value, 6, 3),
-        `Liquidez de ${M.fmt(e.liquid, base)} contra ${M.fmt(e.monthly, base)} de salida mensual típica (gasto + dividendos).`,
-        'Referencia: 3 a 6 meses.'),
+        `${c(e.liquid)} en cuentas; sales ${c(e.monthly)} al mes (gasto + dividendos).`,
+        'Referencia: 3 a 6 meses.', e.monthly ? `Para 3 meses te faltan ${c(Math.max(0, 3 * e.monthly - e.liquid))}.` : null),
       item('Dividendos sobre ingreso', pct(m.value), level(m.value, 0.25, 0.3, true),
-        `${M.fmt(m.dividend, base)} al mes contra ${M.fmt(m.income, base)} de ingreso mensual promedio${m.fixedOnly != null ? ` (${pct(m.fixedOnly)} solo con el ingreso fijo)` : ''}.`,
-        'Los bancos en Chile piden 25%, hasta 30%.'),
+        `${c(m.dividend)} al mes de ${c(m.income)} de ingreso promedio${m.fixedOnly != null ? `; ${pct(m.fixedOnly)} solo con el sueldo` : ''}.`,
+        'Los bancos en Chile piden 25%, hasta 30%.', 'Un arriendo lo baja: simúlalo abajo en la caja.'),
       item('Endeudamiento', pct(l.value), level(l.value, 0.5, 0.8, true),
-        `Deudas ${M.fmt(l.debts, base)} sobre activos ${M.fmt(l.assets, base)}.`,
+        `Debes ${c(l.debts)} de ${c(l.assets)} en activos.`,
         'Bajo 50% es holgado; los créditos hipotecarios lo suben al comienzo.')));
 }
 
@@ -61,9 +64,7 @@ export function forecastCard(redraw) {
   // parte en hoy (la liquidez actual) y sigue mes a mes
   const pts = [{ short: 'hoy', long: 'Hoy', ym: M.curYm() }, ...f.rows.map(r => ({ short: M.monthShort(r.ym).toLowerCase(), long: M.monthName(r.ym), ym: r.ym }))];
   const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
-  const msg = low.balance < 0
-    ? `Tu caja llegaría a ${M.fmt(low.balance, base)} en ${M.monthName(low.ym).toLowerCase()}${low === f.rows.at(-1) ? '' : ` y cerraría en ${M.fmt(f.rows.at(-1).balance, base)}`}.`
-    : `Tu caja no baja de ${M.fmt(low.balance, base)} y cerraría en ${M.fmt(f.rows.at(-1).balance, base)}.`;
+  const msg = forecastMessage(f);
   const num = (key, label, step) => h('label', { class: 'fc-field' }, h('span', null, label),
     h('input', { type: 'text', inputmode: 'decimal', value: String(fcView[key]).replace('.', ','), onchange: (e) => { const v = M.parseAmount(e.target.value); if (Number.isFinite(v)) { fcView[key] = v; fcView.touched = true; redraw(); } } }));
   const scen = prop ? h('div', { class: 'fc-scen' },
@@ -91,19 +92,39 @@ export function forecastCard(redraw) {
       }),
       scen),
     table: dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])),
-    footnote: `Parte con tu liquidez de hoy (${M.fmt(f.liquid, base)}: cuentas menos tarjetas). Ingresos: ${M.fmt(f.incomeBase, base)} al mes${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${M.fmt(v, base)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${M.fmt(f.spendBase, base)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
+    footnote: `Parte con tu liquidez de hoy (${compactMoney(f.liquid, base)}: cuentas menos tarjetas). Ingresos: ${compactMoney(f.incomeBase, base)} al mes${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${compactMoney(v, base)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${compactMoney(f.spendBase, base)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
   });
 }
 
 // Aviso corto para Inicio si la caja proyectada se pone negativa.
+// Mínimo, recuperación y cierre en una frase (montos compactos).
+const monthLow = (ym) => M.monthName(ym).toLowerCase();
+function forecastMessage(f, lead = 'Tu caja') {
+  const base = M.base();
+  const c = (v) => compactMoney(v, base);
+  const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
+  const end = f.rows.at(-1);
+  if (low.balance >= 0) return `${lead} no baja de ${c(low.balance)}; en 12 meses tendrías ${c(end.balance)}.`;
+  const back = f.rows.find(r => r.ym > low.ym && r.balance >= 0);
+  const backName = back && (back.ym.slice(0, 4) === low.ym.slice(0, 4) ? monthLow(back.ym).split(' ')[0] : monthLow(back.ym));
+  return `${lead} bajaría hasta ${c(low.balance)} en ${monthLow(low.ym)}${back ? ` y volvería a positivo en ${backName}` : ''}; en 12 meses: ${c(end.balance)}.`;
+}
+
+// Aviso corto para Inicio si la caja proyectada se pone negativa; se puede ocultar hasta el mes siguiente.
+const HIDE = 'moni.fcAlertHidden';
 export function forecastAlert() {
+  try { if (localStorage.getItem(HIDE) === M.curYm()) return null; } catch { /* ignore */ }
   const f = M.cashForecast({ months: 12 });
   if (!f.incomeBase) return null;                              // sin historial de ingresos no hay proyección útil
   const neg = f.rows.find(r => r.balance < 0);
   if (!neg) return null;
-  return h('a', { class: 'card alert-card', href: '#/reportes', onclick: () => { try { sessionStorage.setItem('moni.reportView', 'analysis'); } catch { /* ignore */ } } },
-    h('div', { class: 'title' }, `⚠️ Tu caja se pondría negativa en ${M.monthName(neg.ym).toLowerCase()}`),
-    h('div', { class: 'muted small' }, `Con tus ingresos y gastos típicos y los dividendos de tus créditos. Ver la proyección y simular un arriendo en Reportes.`));
+  const card = h('section', { class: 'card alert-card' },
+    h('div', { class: 'title' }, `⚠️ Tu caja quedaría en negativo desde ${monthLow(neg.ym)}`),
+    h('div', { class: 'small' }, forecastMessage(f, 'Bajaría')),
+    h('div', { class: 'card-foot' },
+      h('button', { class: 'btn small ghost', type: 'button', onclick: () => { try { localStorage.setItem(HIDE, M.curYm()); } catch { /* ignore */ } card.remove(); } }, 'Ocultar este mes'),
+      h('a', { class: 'btn small', href: '#/reportes', onclick: () => { try { sessionStorage.setItem('moni.reportView', 'analysis'); } catch { /* ignore */ } } }, 'Ver proyección')));
+  return card;
 }
 
 // ---- Este año vs el anterior --------------------------------------------------------------------
@@ -121,7 +142,7 @@ export function yoyCard(mode) {
     legendItems: [{ name: 'Gastaste más', color: '--viz-2', kind: 'rect' }, { name: 'Gastaste menos', color: '--viz-1', kind: 'rect' }],
     chart: h('div', null,
       h('p', { class: 'pace-msg' + (total > 0.05 ? ' up-bad' : total < -0.05 ? ' down-good' : '') },
-        `${M.fmt(y.now, base)} este año contra ${M.fmt(y.before, base)} el anterior en los mismos meses: ${sgnPct(total)} real.`),
+        `${compactMoney(y.now, base)} este año contra ${compactMoney(y.before, base)} el anterior en los mismos meses: ${sgnPct(total)} real.`),
       h('div', { class: 'div-list' }, top.map(r => h('button', { type: 'button', class: 'div-row yoy', onclick: () => r.catId && openCategoryDetail({ catId: r.catId, kind: 'expense', mode, period: '24' }) },
         h('div', { class: 'div-name' }, h('span', null, `${r.icon ? r.icon + ' ' : ''}${r.label}`), h('small', null, `${compactMoney(r.before, base)} → ${compactMoney(r.now, base)}`)),
         h('div', { class: 'div-track', 'aria-hidden': 'true' }, h('span', { class: 'div-zero' }),
@@ -150,7 +171,7 @@ export function fixedVarCard(months, mode) {
     legendItems: [{ name: 'Fijos', color: '--viz-1' }, { name: 'Variables', color: '--viz-2' }],
     chart: h('div', null,
       shareBar({ segments: [{ name: 'Fijos', value: F, color: '--viz-1' }, { name: 'Variables', value: V, color: '--viz-2' }].filter(x => x.value > 0), cur: base, ariaLabel: `Fijos ${pct(F / (F + V))}, variables ${pct(V / (F + V))}` }),
-      h('p', { class: 'small' }, `Fijos ${pct(F / (F + V))} (${M.fmt(F / months.length, base)} al mes) · variables ${pct(V / (F + V))} (${M.fmt(V / months.length, base)} al mes).`),
+      h('p', { class: 'small' }, `Fijos ${pct(F / (F + V))} (${compactMoney(F / months.length, base)} al mes) · variables ${pct(V / (F + V))} (${compactMoney(V / months.length, base)} al mes).`),
       lineChart({
         points: months.map(ym => ({ short: M.monthShort(ym).toLowerCase(), long: M.monthName(ym), ym })), cur: base, height: 190,
         series: [{ name: 'Fijos', values: fixed, color: '--viz-1' }, { name: 'Variables', values: vari, color: '--viz-2' }],

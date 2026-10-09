@@ -49,7 +49,7 @@ h4 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spa
 .offline-pill { display: none; font-size: 12px; background: var(--warn); color: var(--warn-ink); padding: 2px 10px; border-radius: 99px; }
 body.offline .offline-pill { display: inline-block; }
 
-main { max-width: 720px; margin: 0 auto; padding: 12px 16px; }
+main { max-width: 720px; margin: 0 auto; padding: 12px 16px 84px; }   /* abajo: que el botón ＋ no tape lo último */
 .page > * + * { margin-top: 12px; }
 
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: block; width: 100%; text-align: left; }
@@ -183,7 +183,7 @@ select:disabled { opacity: .65; }
 
 /* Gráficos y tablas */
 .bars { display: grid; gap: 8px; margin-top: 10px; }
-.bar-row { display: grid; grid-template-columns: minmax(80px, 36%) 1fr auto; gap: 8px; align-items: center; font-size: 13px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 46%) 1fr auto; gap: 8px; align-items: center; font-size: 13px; }
 .bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-track { background: var(--bg); border-radius: 6px; height: 10px; overflow: hidden; }
 .bar-fill { background: var(--brand); height: 100%; border-radius: 6px; }
@@ -427,7 +427,10 @@ select:disabled { opacity: .65; }
 .rent { display: grid; gap: 4px; }
 .rent-line { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
 .rent-line.strong { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 2px; font-size: 15px; }
-.heat td.anom { box-shadow: inset 0 0 0 2px var(--ink); font-weight: 700; }
+/* fuera de lo normal: anillo rojo con un borde del color de la tarjeta (se ve sobre celdas claras y oscuras) y esquina */
+.heat td.anom { position: relative; box-shadow: inset 0 0 0 2px var(--neg), inset 0 0 0 4px var(--card); }
+.heat td.anom::after { content: ''; position: absolute; top: 0; right: 0; border-style: solid; border-width: 0 12px 12px 0; border-color: transparent var(--neg) transparent transparent; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---- Análisis: salud, proyección, este año vs el anterior ---------------------------------- */
 .seg.tabs { display: flex; width: 100%; margin-bottom: 10px; }
@@ -453,10 +456,15 @@ select:disabled { opacity: .65; }
 .alert-card .title { font-weight: 700; margin-bottom: 2px; }
 .made-of { margin-top: 6px; }
 .made-of p { margin: 0 0 6px; }
-.made-row { display: grid; grid-template-columns: minmax(0, 1.3fr) 1fr auto; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.made-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.made-row .made-track { grid-column: 1 / -1; }
 .made-row.on .made-name { color: var(--brand); }
 .made-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .made-name small { color: var(--muted); font-weight: 400; }
-.made-track { height: 10px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.made-track { height: 8px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .made-track span { display: block; height: 100%; background: var(--viz-1); border-radius: 3px; }
 .made-val { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+.health-hint { font-size: 13px; font-weight: 600; }
+.section-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 18px 2px 0; }
+.section-head h4 { margin: 0; }
+.alert-card .card-foot { margin-top: 8px; justify-content: flex-end; gap: 8px; }

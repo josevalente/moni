@@ -423,7 +423,7 @@ function renderBackup(root) {
           await db.wipe();
           // también las preferencias de este teléfono. Se vuelve a la bienvenida (importar un respaldo o empezar
           // de cero) en vez de crear personas nuevas que después se duplicarían al combinar
-          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt', 'moni.fcAlertHidden']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
           location.hash = '#/'; toast('Datos borrados');
         }
       } }, 'Borrar todos los datos'))));
