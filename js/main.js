@@ -81,7 +81,7 @@ function draw() {
 function updateBadge() {
   if (!('setAppBadge' in navigator) || !db.count('people')) return;
   try {
-    const n = pendingNow().items.length;
+    const n = pendingNow().items.filter(i => i.type !== 'catsug').length;   // las sugerencias no son tareas
     (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
   } catch { /* ignore */ }
 }

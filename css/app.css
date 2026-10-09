@@ -468,3 +468,11 @@ select:disabled { opacity: .65; }
 .section-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 18px 2px 0; }
 .section-head h4 { margin: 0; }
 .alert-card .card-foot { margin-top: 8px; justify-content: flex-end; gap: 8px; }
+.fold-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; min-height: 32px; }
+.fold-head h3 { margin: 0; flex: 1; }
+.fold-chev { color: var(--muted); font-size: 18px; }
+.acc-fold .fold-head[aria-expanded="true"] { margin-bottom: 4px; }
+/* sugerencia de categoría propia: nombre y detalle a todo el ancho, botones debajo */
+.sug-row { flex-wrap: wrap; row-gap: 6px; }
+.sug-row .main { flex-basis: 100%; }
+.sug-row .row-actions { margin-left: auto; }

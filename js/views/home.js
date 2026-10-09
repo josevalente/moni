@@ -3,17 +3,18 @@ import * as db from '../db.js';
 import * as M from '../model.js';
 import * as FX from '../fx.js';
 import { fill, h, bars, modal, toast } from '../ui.js';
-import { txRow } from './txs.js';
 import { openCategoryDetail } from './reports.js';
 import { openTxForm } from './add.js';
 import { showCloseMonth } from './close.js';
-import { exportBackup } from './settings.js';
+import { exportBackup, reviewOwnCategories } from './settings.js';
 import { openAccount } from './account.js';
 import { paceCard, netWorthTrend, openNetWorth } from './insights.js';
 import { sparkline } from '../charts.js';
 import { unusualCard, forecastAlert } from './analysis.js';
 
 const st = { mode: 'total', ym: null, laterOpen: false, zeroOpen: false, fixedOpen: false };
+// Cuentas en Inicio: plegada por defecto; se recuerda en este teléfono
+const accOpen = { get: () => { try { return localStorage.getItem('moni.accOpen') === '1'; } catch { return false; } }, set: (v) => { try { localStorage.setItem('moni.accOpen', v ? '1' : '0'); } catch { /* ignore */ } } };
 
 export function settleText(balance) {
   const tr = M.settleSummary(balance);
@@ -103,6 +104,12 @@ function pendingRow(i, ref, root) {
     title = f.length === 1 ? `${f[0].name} sin actualizar` : `${f.length} inversiones sin actualizar`;
     sub = `${f.slice(0, 3).map(x => x.name).join(', ')}${f.length > 3 ? ` y ${f.length - 3} más` : ''} · ${ago(f[0].days)}`;
     action = h('button', { class: 'btn small', onclick: () => { location.hash = '#/mas/inversiones'; } }, 'Actualizar');
+  } else if (i.type === 'catsug') {
+    // se repite en "Otros": su propia categoría (o mover a la que ya existe con ese nombre)
+    icon = '🏷️';
+    title = i.list.length === 1 ? `"${i.list[0].label}" se repite en ${i.list[0].cat.name}` : `${i.list.length} gastos se repiten en "Otros"`;
+    sub = i.list.slice(0, 3).map(x => `${x.label} (${x.count})`).join(', ') + (i.list.length > 3 ? '…' : '');
+    action = h('button', { class: 'btn small', onclick: reviewOwnCategories }, 'Revisar');
   } else {
     icon = '💾';
     title = i.days === Infinity ? 'Aún no has hecho un respaldo' : `Respaldo ${ago(i.days)}`;
@@ -229,12 +236,7 @@ export function renderHome(root) {
         a.reconciled && a.reconciled.date ? `✓ cuadró ${new Date(a.reconciled.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}` : null].filter(Boolean).join(' · '))),
     h('div', { class: 'amt ' + (v < 0 ? 'neg' : '') }, M.fmt(v, a.currency)),
     h('div', { class: 'chev', 'aria-hidden': 'true' }, '›'));
-
-  // últimos 6: se ordenan solo los de las últimas semanas (no los ~7.000 del historial)
-  const cut = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
-  let cand = db.all('tx').filter(t => t.kind !== 'settle' && t.date >= cut);
-  if (cand.length < 6) cand = db.all('tx').filter(t => t.kind !== 'settle');
-  const recents = M.sortTx(cand).slice(0, 6);
+  const open = accOpen.get();
 
   fill(root,
     pendingCard(root),
@@ -273,13 +275,16 @@ export function renderHome(root) {
         nw.points ? h('div', null, h('span', null, 'Puntos y millas'), M.fmt(nw.points, base)) : null),
       nw.missing.length ? h('div', { class: 'warn' }, `Falta tipo de cambio de ${nw.missing.join(', ')}; se asumió 1. Actualízalo en Más › Monedas.`) : null,
       h('div', { class: 'card-foot' }, h('span'), h('button', { class: 'btn small', onclick: openNetWorth }, 'Ver evolución'))),
-    h('section', { class: 'card' },
-      h('h3', null, 'Cuentas'),
-      accMain.length ? accMain.map(accRow) : h('p', { class: 'empty' }, 'Sin cuentas con saldo. Agrégalas en Más › Cuentas.'),
-      accZero.length ? h('button', { class: 'link-row', onclick: () => { st.zeroOpen = !st.zeroOpen; renderHome(root); } },
-        st.zeroOpen ? 'Ocultar las cuentas en cero' : `${accZero.length} cuentas en cero`) : null,
-      st.zeroOpen ? accZero.map(accRow) : null),
-    h('section', { class: 'card' },
-      h('div', { class: 'card-head' }, h('h3', null, 'Últimos movimientos'), h('a', { href: '#/movs' }, 'Ver todos')),
-      recents.length ? recents.map(t => txRow(t, { showDate: true })) : h('p', { class: 'empty' }, 'Toca ＋ para registrar tu primer movimiento.')));
+    // los últimos movimientos están en la pestaña Movimientos
+    h('section', { class: 'card acc-fold' },
+      h('button', { type: 'button', class: 'fold-head', 'aria-expanded': String(open), onclick: () => { accOpen.set(!open); renderHome(root); } },
+        h('h3', null, 'Cuentas'),
+        h('span', { class: 'muted small' }, `${accMain.length} con saldo`),
+        h('span', { class: 'fold-chev', 'aria-hidden': 'true' }, open ? '▴' : '▾')),
+      open ? [
+        accMain.length ? accMain.map(accRow) : h('p', { class: 'empty' }, 'Sin cuentas con saldo. Agrégalas en Más › Cuentas.'),
+        accZero.length ? h('button', { class: 'link-row', onclick: () => { st.zeroOpen = !st.zeroOpen; renderHome(root); } },
+          st.zeroOpen ? 'Ocultar las cuentas en cero' : `${accZero.length} cuentas en cero`) : null,
+        st.zeroOpen ? accZero.map(accRow) : null,
+      ] : null));
 }

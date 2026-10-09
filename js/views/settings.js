@@ -59,6 +59,71 @@ async function afterLink(cat) {
   }
 }
 
+// Lo que se repite en "Otros" pasa a su propia categoría (o a una que ya existe con ese nombre), con todo su
+// historial y su mismo reparto; se puede deshacer.
+export async function ownCategory(sg, onDone) {
+  const from = M.category(sg.catId);
+  const n = M.txsByDescription(sg.catId, sg.key).length;
+  const done = async (r, name) => {
+    toast(`${M.fmtInt(r.movedIds.length)} movimientos "${sg.label}" ahora en ${name}`, { label: 'Deshacer', onAction: () => M.undoMoveByDescription(r), ms: 8000 });
+    if (onDone) onDone(r);
+  };
+  if (sg.existing) {
+    if (!await confirmDialog(`¿Mover los ${M.fmtInt(n)} movimientos "${sg.label}" de ${from.name} a ${sg.existing.name}? Conservan su reparto y quién pagó.`, { ok: 'Mover', danger: false })) return;
+    return done(await M.moveByDescription({ fromId: from.id, key: sg.key, toId: sg.existing.id }), sg.existing.name);
+  }
+  const groups = [...new Set(M.categories().map(x => x.group).filter(Boolean))];
+  formModal({
+    title: 'Categoría propia', value: { name: sg.label, icon: '', group: from.group || '' }, saveLabel: 'Crear y mover',
+    fields: [
+      { key: 'name', label: 'Nombre', type: 'text', required: true },
+      { key: 'icon', label: 'Ícono (emoji, opcional)', type: 'text' },
+      { key: 'group', label: 'Grupo', type: 'text', list: 'grouplist2' },
+    ],
+    extra: [
+      h('p', { class: 'muted small' }, `Se moverán los ${M.fmtInt(n)} movimientos que empiezan con "${sg.label}" desde ${from.name} (todo el historial), con su mismo reparto. Al registrar uno nuevo con esa descripción se sugerirá esta categoría.`),
+      h('datalist', { id: 'grouplist2' }, groups.map(g => h('option', { value: g }))),
+    ],
+    onSave: async (v) => {
+      const dup = M.categories().find(c => !c.archived && M.descWords(c.name).join(' ') === M.descWords(v.name).join(' '));
+      if (dup) { toast(`Ya existe "${dup.name}"`); return false; }
+      await done(await M.moveByDescription({ fromId: from.id, key: sg.key, name: v.name, icon: v.icon, group: v.group }), v.name);
+    },
+  });
+}
+
+// Fila de una sugerencia (en la lista de Inicio y en el detalle de una categoría "Otros").
+export function ownCategoryRow(sg, { showFrom = false } = {}) {
+  return h('div', { class: 'row static sug-row' },
+    h('div', { class: 'main' }, h('div', { class: 'title' }, sg.label),
+      h('div', { class: 'sub' }, `${showFrom ? `en ${sg.cat.name} · ` : ''}${M.fmtInt(sg.count)} veces en ${M.fmtInt(sg.months)} meses · ${M.fmt(sg.total, M.base())}`)),
+    h('div', { class: 'row-actions' },
+      h('button', { class: 'btn small', type: 'button', onclick: () => ownCategory(sg) }, sg.existing ? `Mover a ${sg.existing.name}` : 'Crear categoría'),
+      h('button', { class: 'icon-btn small', type: 'button', 'aria-label': `No sugerir más ${sg.label}`, onclick: () => dismissOwnCategory(sg) }, '✕')));
+}
+
+// Todas las sugerencias (desde Pendientes); se actualiza al mover o descartar y se cierra si no quedan.
+export function reviewOwnCategories() {
+  const body = h('div');
+  let m = null;
+  const draw = () => {
+    const list = M.categorySuggestions();
+    if (!list.length && m) { m.close(); return; }
+    fill(body,
+      h('p', { class: 'muted small' }, 'Se repiten en tus categorías "Otros" en el último año. Con su propia categoría los verás aparte en los reportes; se mueve todo su historial y se puede deshacer.'),
+      list.map(sg => ownCategoryRow(sg, { showFrom: true })));
+  };
+  const unsub = db.subscribe(draw);
+  draw();
+  m = modal('Categorías propias', body, { onClose: unsub });
+}
+
+// "No sugerir más" (con deshacer)
+export async function dismissOwnCategory(sg) {
+  await M.ignoreCategorySuggestion(sg.catId, sg.key);
+  toast(`No se volverá a sugerir "${sg.label}"`, { label: 'Deshacer', onAction: () => M.ignoreCategorySuggestion(sg.catId, sg.key, true) });
+}
+
 export function editCategory(c) {
   const isNew = !(c && c.id);
   const people = M.people();

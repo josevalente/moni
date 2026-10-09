@@ -943,6 +943,94 @@ export function byDescription(txs) {
   return [...m.values()].sort((a, b) => b.total - a.total);
 }
 
+// ---- Asistentes: categoría propia para lo que se repite en "Otros" ----------------------------
+
+// Palabras de una descripción, sin tildes ni signos ("Starlink oct." → ["starlink", "oct"]).
+export const descWords = (desc) => normKey(desc || '').replace(/[^a-zñ ]+/g, ' ').split(' ').filter(Boolean);
+const startsWithWords = (w, pre) => pre.length <= w.length && pre.every((x, i) => w[i] === x);
+// palabras que por sí solas no dicen qué es ("pago", "cargo"…): no bastan para proponer una categoría
+const GENERIC_WORDS = new Set(['pago', 'pagos', 'compra', 'compras', 'cargo', 'cobro', 'regalo', 'regalos', 'transferencia', 'transf', 'aporte',
+  'devolucion', 'comision', 'abono', 'retiro', 'gasto', 'gastos', 'varios', 'otro', 'otros', 'pedido', 'cuota', 'seguro', 'para', 'con', 'por',
+  'del', 'las', 'los', 'una', 'uno', 'mes', 'cuenta']);
+const meaningful = (w) => w.length >= 3 && !GENERIC_WORDS.has(w);
+
+// Categorías "cajón de sastre" (Otros, Varios…): ahí es donde conviene separar lo que se repite.
+export const isCatchAll = (cat) => !!cat && /\b(otros?|otras?|varios|varias|general|miscelaneos?|sin categoria)\b/.test(normKey(cat.name));
+
+// Lo que se repite en una categoría "Otros" en el último año (al menos 3 veces, en 2 meses distintos o más):
+// se agrupa por el comienzo de la descripción ("Starlink", "Starlink oct" → "Starlink") y se propone su
+// propia categoría, o mover a una que ya existe con ese nombre. `catId` limita a una categoría.
+export function categorySuggestions({ catId = null, minCount = 3, minMonths = 2 } = {}) {
+  const since = addDays(todayStr(), -365);
+  const ignore = new Set(settings().catSuggestIgnore || []);
+  const per = new Map();                                   // catId → prefijo → grupo
+  for (const t of db.all('tx')) {
+    if ((t.kind !== 'out' && t.kind !== 'in') || t.date < since) continue;
+    const cat = category(t.categoryId);
+    if (!cat || cat.archived || (catId ? cat.id !== catId : !isCatchAll(cat))) continue;
+    const w = descWords(t.desc);
+    let m = per.get(cat.id);
+    if (!m) per.set(cat.id, (m = new Map()));
+    for (let n = 1; n <= Math.min(3, w.length); n++) {
+      const key = w.slice(0, n).join(' ');
+      let g = m.get(key);
+      if (!g) m.set(key, (g = { cat, key, words: w.slice(0, n), count: 0, months: new Set(), total: 0, first: t }));
+      g.count++; g.months.add(t.date.slice(0, 7)); g.total += txBase(t) * (t.kind === 'in' ? -1 : 1);
+    }
+  }
+  const byName = new Map(db.all('categories').filter(c => !c.archived).map(c => [descWords(c.name).join(' '), c]));
+  const out = [];
+  for (const m of per.values()) {
+    const chosen = [];
+    // del comienzo más corto al más largo: "Starlink" gana sobre "Starlink oct"
+    for (const g of [...m.values()].sort((a, b) => a.words.length - b.words.length || b.count - a.count)) {
+      if (g.count < minCount || g.months.size < minMonths || !g.words.some(meaningful) || !meaningful(g.words[0]) && g.words.length === 1) continue;
+      if (chosen.some(c => startsWithWords(g.words, c.words)) || ignore.has(`${g.cat.id}|${g.key}`)) continue;
+      chosen.push(g);
+    }
+    for (const g of chosen) {
+      const label = String(g.first.desc).replace(/[^\p{L} ]+/gu, ' ').split(' ').filter(Boolean).slice(0, g.words.length).join(' ');
+      const existing = byName.get(g.key);
+      out.push({ catId: g.cat.id, cat: g.cat, key: g.key, label: label === label.toLowerCase() ? label.charAt(0).toUpperCase() + label.slice(1) : label, count: g.count, months: g.months.size, total: g.total,
+        existing: existing && existing.id !== g.cat.id && existing.kind === g.cat.kind ? existing : null });
+    }
+  }
+  return out.sort((a, b) => b.count - a.count || b.total - a.total);
+}
+
+// Movimientos de una categoría cuya descripción empieza con esas palabras (todo el historial).
+export const txsByDescription = (fromId, key) => {
+  const pre = key.split(' ');
+  return db.all('tx').filter(t => (t.kind === 'out' || t.kind === 'in') && (category(t.categoryId) || {}).id === fromId && startsWithWords(descWords(t.desc), pre));
+};
+
+// Mueve esos movimientos a otra categoría, o a una nueva con el mismo reparto que la de origen. Devuelve lo
+// necesario para deshacer. Como las sugerencias al registrar aprenden del historial, los próximos con esa
+// descripción ya proponen la categoría nueva.
+export async function moveByDescription({ fromId, key, toId = null, name = '', icon = '', group = null }) {
+  const from = db.get('categories', fromId);
+  let created = false;
+  if (!toId) {
+    const { id, createdAt, updatedAt, mergedInto, archived, invId, invFrom, debtId, icon: _i, name: _n, ...rest } = from;
+    const c = await db.put('categories', { ...rest, name, icon, group: group ?? from.group ?? '', order: (from.order ?? 0) + 0.5 });
+    toId = c.id; created = true;
+  }
+  const moved = txsByDescription(fromId, key);
+  if (moved.length) await db.putMany('tx', moved.map(t => ({ ...t, categoryId: toId })));
+  return { fromId, toId, created, movedIds: moved.map(t => t.id) };
+}
+export async function undoMoveByDescription({ fromId, toId, created, movedIds }) {
+  const back = movedIds.map(id => db.get('tx', id)).filter(t => t && t.categoryId === toId).map(t => ({ ...t, categoryId: fromId }));
+  if (back.length) await db.putMany('tx', back);
+  if (created && !db.all('tx').some(t => t.categoryId === toId)) await db.del('categories', toId);
+}
+export async function ignoreCategorySuggestion(catId, key, undo = false) {
+  const st = settings();
+  const k = `${catId}|${key}`;
+  const list = (st.catSuggestIgnore || []).filter(x => x !== k);
+  return db.put('settings', { ...st, catSuggestIgnore: undo ? list : [...list, k] });
+}
+
 // ---- Asistentes: sugerencias por descripción --------------------------------
 
 // quita tildes pero conserva la ñ ("pañales" no debe coincidir con "pantalones")
@@ -1147,6 +1235,9 @@ export function pendingItems(ref = curYm(), { lastBackup = null, now = Date.now(
     const days = Math.floor((now - Date.parse(r.date + 'T12:00:00')) / 864e5);
     if (days > 35) items.push({ type: 'recon', key: 'recon:' + a.id, acc: a, days, since: r.date });
   }
+  // lo que se repite en "Otros": una sola fila que abre la lista (no cuenta para el número del ícono)
+  const sugs = categorySuggestions();
+  if (sugs.length) items.push({ type: 'catsug', key: 'catsug', list: sugs });
   if (db.count('tx') >= 20) {
     const days = lastBackup ? Math.floor((now - Date.parse(lastBackup)) / 864e5) : Infinity;
     if (days > 14) items.push({ type: 'backup', key: 'backup', days });

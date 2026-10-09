@@ -99,15 +99,17 @@ export function forecastCard(redraw) {
 // Aviso corto para Inicio si la caja proyectada se pone negativa.
 // Mínimo, recuperación y cierre en una frase (montos compactos).
 const monthLow = (ym) => M.monthName(ym).toLowerCase();
-function forecastMessage(f, lead = 'Tu caja') {
+function forecastMessage(f, short = false) {
+  const lead = short ? '' : 'Tu caja ';
+  const cap = (x) => (short ? x.charAt(0).toUpperCase() + x.slice(1) : x);
   const base = M.base();
   const c = (v) => compactMoney(v, base);
   const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
   const end = f.rows.at(-1);
-  if (low.balance >= 0) return `${lead} no baja de ${c(low.balance)}; en 12 meses tendrías ${c(end.balance)}.`;
+  if (low.balance >= 0) return `${lead}${cap('no baja de')} ${c(low.balance)}; en 12 meses tendrías ${c(end.balance)}.`;
   const back = f.rows.find(r => r.ym > low.ym && r.balance >= 0);
   const backName = back && (back.ym.slice(0, 4) === low.ym.slice(0, 4) ? monthLow(back.ym).split(' ')[0] : monthLow(back.ym));
-  return `${lead} bajaría hasta ${c(low.balance)} en ${monthLow(low.ym)}${back ? ` y volvería a positivo en ${backName}` : ''}; en 12 meses: ${c(end.balance)}.`;
+  return `${lead}${cap('bajaría')} hasta ${c(low.balance)} en ${monthLow(low.ym)}${back ? ` y volvería a positivo en ${backName}` : ''}; en 12 meses: ${c(end.balance)}.`;
 }
 
 // Aviso corto para Inicio si la caja proyectada se pone negativa; se puede ocultar hasta el mes siguiente.
@@ -120,7 +122,7 @@ export function forecastAlert() {
   if (!neg) return null;
   const card = h('section', { class: 'card alert-card' },
     h('div', { class: 'title' }, `⚠️ Tu caja quedaría en negativo desde ${monthLow(neg.ym)}`),
-    h('div', { class: 'small' }, forecastMessage(f, 'Bajaría')),
+    h('div', { class: 'small' }, forecastMessage(f, true)),
     h('div', { class: 'card-foot' },
       h('button', { class: 'btn small ghost', type: 'button', onclick: () => { try { localStorage.setItem(HIDE, M.curYm()); } catch { /* ignore */ } card.remove(); } }, 'Ocultar este mes'),
       h('a', { class: 'btn small', href: '#/reportes', onclick: () => { try { sessionStorage.setItem('moni.reportView', 'analysis'); } catch { /* ignore */ } } }, 'Ver proyección')));

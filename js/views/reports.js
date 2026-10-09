@@ -4,7 +4,7 @@ import * as M from '../model.js';
 import { fill, h, modal } from '../ui.js';
 import { columnChart, heatTable, vizCard, dataTable, statTiles, compactMoney, lineChart } from '../charts.js';
 import { txRow } from './txs.js';
-import { editCategory } from './settings.js';
+import { editCategory, ownCategoryRow } from './settings.js';
 import { healthCard, forecastCard, yoyCard, fixedVarCard } from './analysis.js';
 
 const st = { view: 'months', period: '12', kind: 'expense', mode: 'total', by: 'category', extra: 'all', money: 'nom', month: null };
@@ -233,6 +233,12 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
         h('span', { class: 'made-val' }, M.fmt(g.total, base)),
         h('span', { class: 'made-track', 'aria-hidden': 'true' }, h('span', { style: { width: Math.max(0, g.total) / gTotal * 100 + '%' } })))),
       groups.length > 8 ? h('p', { class: 'muted small' }, `Y ${M.fmtInt(groups.length - 8)} descripciones más.`) : null) : null;
+    // en "Otros": lo que se repite, para pasarlo a su propia categoría
+    const sugs = catId && M.isCatchAll(M.category(catId)) ? M.categorySuggestions({ catId }) : [];
+    const repeats = sugs.length ? h('section', { class: 'own-cats' },
+      h('h4', null, 'Se repiten'),
+      h('p', { class: 'muted small' }, 'En el último año. Con su propia categoría los verás aparte en los reportes.'),
+      sugs.slice(0, 6).map(sg => ownCategoryRow(sg))) : null;
     const periodSeg = h('div', { class: 'seg small', role: 'group', 'aria-label': 'Período' }, [['6', '6 m'], ['12', '12 m'], ['24', '24 m'], ['60', '5 años'], ['all', 'Todo']].map(([v, l]) => h('button', {
       type: 'button', class: ds.period === v ? 'on' : '', 'aria-pressed': String(ds.period === v), onclick: () => { ds.period = v; ds.month = null; ds.desc = null; ds.limit = 80; draw(); },
     }, l)));
@@ -257,6 +263,7 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
         }),
         table: dataTable(['Mes', 'Monto', 'Movimientos'], months.map((ym, i) => [M.monthName(ym), M.fmt(values[i], base), String(counts[i])])),
       }),
+      repeats,
       madeOf,
       h('h4', null, `${sel >= 0 ? `Movimientos de ${M.monthName(months[sel])}` : 'Movimientos'}${pick ? ` · "${pick.label}"` : ''} (${M.fmtInt(txs.length)})`),
       ds.desc ? h('button', { class: 'btn small', type: 'button', onclick: () => { ds.desc = null; draw(); } }, 'Ver todos') : null,
