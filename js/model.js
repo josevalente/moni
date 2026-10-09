@@ -943,6 +943,21 @@ export function byDescription(txs) {
   return [...m.values()].sort((a, b) => b.total - a.total);
 }
 
+// Quién paga casi siempre una categoría (ej. "Gastos pagados por Berni"): si en el último año el 80% o más de
+// sus movimientos (al menos 5) los pagó la misma persona, se propone como pagador al elegirla.
+export function typicalPayer(catId, kind = 'out') {
+  const since = addDays(todayStr(), -365);
+  const n = new Map();
+  let total = 0;
+  for (const t of db.all('tx')) {
+    if (t.kind !== kind || t.date < since || !t.paidBy || (category(t.categoryId) || {}).id !== catId) continue;
+    n.set(t.paidBy, (n.get(t.paidBy) || 0) + 1); total++;
+  }
+  if (total < 5) return null;
+  const [pid, c] = [...n.entries()].sort((a, b) => b[1] - a[1])[0];
+  return c / total >= 0.8 && db.get('people', pid) ? pid : null;
+}
+
 // ---- Asistentes: categoría propia para lo que se repite en "Otros" ----------------------------
 
 // Palabras de una descripción, sin tildes ni signos ("Starlink oct." → ["starlink", "oct"]).

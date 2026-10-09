@@ -135,6 +135,13 @@ export function openTxForm(existing, defaults = {}) {
       if (acc()) { s.currency = acc().currency; s.fxTouched = false; }
     }
   }
+  // la categoría propone a quien casi siempre la paga, salvo que ya se haya elegido a mano (o desde una cartola)
+  function resolvePayer() {
+    if (isEdit || s.payerTouched || lockAccount || people.length < 2 || (s.kind !== 'out' && s.kind !== 'in')) return;
+    const p = M.typicalPayer(s.categoryId, s.kind);
+    if (p && p !== s.paidBy) { setPayer(p); s.payerAuto = true; }
+    else if (!p && s.payerAuto) { setPayer(me); s.payerAuto = false; }    // otra categoría: vuelve a quien registra
+  }
   function setAccount(id) {
     s.accountId = id || null;
     s.accTouched = true;
@@ -241,7 +248,7 @@ export function openTxForm(existing, defaults = {}) {
       const t = x.sg.last;
       s.desc = t.desc; descIn.value = t.desc;
       s.categoryId = x.sg.cat.id;
-      if (t.paidBy && db.get('people', t.paidBy)) setPayer(t.paidBy);
+      if (t.paidBy && db.get('people', t.paidBy)) { setPayer(t.paidBy); s.payerTouched = true; }
       // desde la cartola de una cuenta, la cuenta ya está elegida
       if (s.paidBy === owner && usable(t.accountId) && !lockAccount) setAccount(t.accountId);
       s.alloc = allocToState(t.alloc); s.allocTouched = true;
@@ -250,6 +257,7 @@ export function openTxForm(existing, defaults = {}) {
       // categoría elegida por nombre: lo escrito era para buscarla, no una descripción
       if (M.stripAccents(x.cat.name.toLowerCase()).startsWith(M.stripAccents(descIn.value.trim().toLowerCase()))) { s.desc = ''; descIn.value = ''; }
       s.categoryId = x.cat.id;
+      resolvePayer();
       resolveAlloc();
     }
     hideSuggestions();
@@ -377,21 +385,30 @@ export function openTxForm(existing, defaults = {}) {
       if (cat) { const i = chipCats.findIndex(c => c.id === cat.id); if (i >= 0) chipCats.splice(i, 1); chipCats.unshift(cat); }
       parts.push(h('div', { class: 'field' }, h('span', null, 'Categoría'),
         h('div', { class: 'chips scroll cat-chips' },
-          chipCats.map(c => h('button', { type: 'button', class: 'chip' + (c.id === s.categoryId ? ' on' : ''), 'aria-pressed': String(c.id === s.categoryId), onclick: () => { s.categoryId = c.id; resolveAlloc(); render(); } }, (c.icon ? c.icon + ' ' : '') + c.name)),
-          h('button', { type: 'button', class: 'chip more', onclick: () => categoryPicker(s.kind, s.categoryId, (id) => { s.categoryId = id; resolveAlloc(); render(); }) }, 'Todas…'))));
+          chipCats.map(c => h('button', { type: 'button', class: 'chip' + (c.id === s.categoryId ? ' on' : ''), 'aria-pressed': String(c.id === s.categoryId), onclick: () => { s.categoryId = c.id; resolvePayer(); resolveAlloc(); render(); } }, (c.icon ? c.icon + ' ' : '') + c.name)),
+          h('button', { type: 'button', class: 'chip more', onclick: () => categoryPicker(s.kind, s.categoryId, (id) => { s.categoryId = id; resolvePayer(); resolveAlloc(); render(); }) }, 'Todas…'))));
 
-      // cuenta: botones de las 2 más usadas, la actual, "sin cuenta" si pagó otra persona, y "Otra…"
+      // cuenta: las 2 más usadas, la actual, "Otra…" (con "Sin cuenta") y, si hay más personas, "Pagó Berni":
+      // quien paga sin una de tus cuentas. Elegir una de tus cuentas vuelve a dejarte como pagador.
       const accIds = [...topAccounts];
       if (s.accountId && !accIds.includes(s.accountId)) accIds.unshift(s.accountId);
-      const other = h('select', { class: 'chip-select', 'aria-label': 'Otra cuenta', onchange: (e) => { if (e.target.value) { setAccount(e.target.value); render(); } } },
-        h('option', { value: '' }, 'Otra…'), accounts.map(a => h('option', { value: a.id }, accLabel(a))));
+      const pickOwn = (id) => { if (s.paidBy !== owner) { setPayer(owner); resolveAlloc(); } s.payerTouched = true; setAccount(id); render(); };
+      const other = h('select', { class: 'chip-select', 'aria-label': 'Otra cuenta', onchange: (e) => {
+        const v = e.target.value;
+        if (v === '__none') { if (s.paidBy !== owner) { setPayer(owner); resolveAlloc(); } s.payerTouched = true; setAccount(null); render(); } else if (v) pickOwn(v);
+      } },
+        h('option', { value: '' }, 'Otra…'), accounts.map(a => h('option', { value: a.id }, accLabel(a))),
+        h('option', { value: '__none' }, `Sin cuenta (${M.personName(owner)}, sin registrar en una cuenta)`));
+      const verb = s.kind === 'in' ? 'Recibió' : 'Pagó';
+      const ownNoAcc = s.paidBy === owner && !s.accountId;
       parts.push(h('div', { class: 'field acc-field', 'data-value': s.accountId || '' },
         h('span', null, s.kind === 'in' ? 'Cuenta de destino' : 'Cuenta'),
         h('div', { class: 'chips' },
-          s.paidBy !== owner ? h('button', { type: 'button', class: 'chip' + (!s.accountId ? ' on' : ''), 'aria-pressed': String(!s.accountId), onclick: () => { setAccount(null); render(); } },
-            `Sin cuenta (${s.kind === 'in' ? 'recibió' : 'pagó'} ${M.personName(s.paidBy)})`) : null,
-          accIds.map(id => { const a = M.account(id); return a && h('button', { type: 'button', class: 'chip acc-chip' + (id === s.accountId ? ' on' : ''), 'aria-pressed': String(id === s.accountId), 'data-acc': id, onclick: () => { setAccount(id); render(); } }, a.name + (a.currency !== base ? ` (${a.currency})` : '') + (a.archived ? ' · archivada' : '')); }),
-          other)));
+          ownNoAcc ? h('button', { type: 'button', class: 'chip on', 'aria-pressed': 'true' }, 'Sin cuenta') : null,
+          accIds.map(id => { const a = M.account(id); return a && h('button', { type: 'button', class: 'chip acc-chip' + (id === s.accountId ? ' on' : ''), 'aria-pressed': String(id === s.accountId), 'data-acc': id, onclick: () => pickOwn(id) }, a.name + (a.currency !== base ? ` (${a.currency})` : '') + (a.archived ? ' · archivada' : '')); }),
+          other,
+          people.filter(p => p.id !== owner).map(p => h('button', { type: 'button', class: 'chip payer-chip' + (s.paidBy === p.id ? ' on' : ''), 'aria-pressed': String(s.paidBy === p.id),
+            onclick: () => { s.payerTouched = true; setPayer(p.id); resolveAlloc(); render(); } }, `👤 ${verb} ${p.name}`)))));
 
       // línea resumida
       const sum = (k, icon, label) => (sumChips[k] = h('button', {
@@ -411,7 +428,7 @@ export function openTxForm(existing, defaults = {}) {
             h('button', { type: 'button', class: 'chip' + (s.date === yesterday ? ' on' : ''), onclick: () => { s.date = yesterday; dateIn.value = yesterday; s.fxTouched = false; render(); } }, 'Ayer'),
             dateIn)));
       } else if (s.open === 'payer' && many) {
-        parts.push(h('div', { class: 'sum-editor' }, seg(people.map(p => ({ v: p.id, l: p.name })), s.paidBy, (v) => { setPayer(v); resolveAlloc(); render(); }, s.kind === 'in' ? 'Lo recibió' : 'Lo pagó')));
+        parts.push(h('div', { class: 'sum-editor' }, seg(people.map(p => ({ v: p.id, l: p.name })), s.paidBy, (v) => { s.payerTouched = true; setPayer(v); resolveAlloc(); render(); }, s.kind === 'in' ? 'Lo recibió' : 'Lo pagó')));
       } else if (s.open === 'alloc' && many) {
         const shown = s.alloc === 'payer' ? s.paidBy : s.alloc;
         const catMode = cat && cat.splitMode === 'fixed' ? 'regla fija de la categoría' : cat && cat.splitMode === 'equal' ? 'partes iguales' : 'según sueldos';
