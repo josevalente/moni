@@ -159,7 +159,7 @@ function cashFlowCard(months) {
   const base = M.base();
   const cur = M.curYm();
   const sv = months.map(ym => M.savingsOfMonth(ym, st.mode));
-  const inc = sv.map(x => x.income);
+  const inc = sv.map(x => x.net);
   const exp = sv.map(x => x.spend);
   if (!inc.some(Boolean)) return null;
   const closed = months.map((ym, i) => i).filter(i => months[i] !== cur);
@@ -169,17 +169,17 @@ function cashFlowCard(months) {
   return vizCard({
     title: 'Ingresos y gastos',
     subtitle: `${st.mode === 'mine' ? 'Mi parte' : 'Hogar'} · la distancia entre las líneas es lo que ahorras`,
-    legendItems: [{ name: 'Ingresos recurrentes', color: '--viz-1' }, { name: 'Consumo', color: '--viz-2' }],
+    legendItems: [{ name: 'Ingresos líquidos', color: '--viz-1' }, { name: 'Consumo', color: '--viz-2' }],
     chart: h('div', null,
       rate != null ? h('p', { class: 'pace-msg' }, `Tasa de ahorro de los meses cerrados: ${pctTxt(rate)} (ahorraste ${M.fmt(sumI - sumE, base)} de ${M.fmt(sumI, base)}).`) : null,
       lineChart({
         points: months.map(ym => ({ short: M.monthShort(ym).toLowerCase(), long: M.monthName(ym), ym })), cur: base,
-        series: [{ name: 'Ingresos recurrentes', values: inc, color: '--viz-1' }, { name: 'Consumo', values: exp, color: '--viz-2' }],
+        series: [{ name: 'Ingresos líquidos', values: inc, color: '--viz-1' }, { name: 'Consumo', values: exp, color: '--viz-2' }],
         extra: (i) => [{ value: M.fmt(inc[i] - exp[i], base, { sign: true }), label: inc[i] ? `Ahorro (${pctTxt((inc[i] - exp[i]) / inc[i])})` : 'Ahorro' }],
         ariaLabel: `Ingresos y gastos por mes; tasa de ahorro ${rate != null ? pctTxt(rate) : '—'}`,
       })),
-    table: dataTable(['Mes', 'Ingresos recurrentes', 'Consumo', 'Ahorro'], months.map((ym, i) => [M.monthName(ym), M.fmt(inc[i], base), M.fmt(exp[i], base), M.fmt(inc[i] - exp[i], base, { sign: true })]).reverse()),
-    footnote: 'Ingresos sin los extraordinarios (herencias, regalos). El consumo no cuenta como gasto lo que en realidad es ahorro: los aportes a una inversión asociada a su categoría (como la AFP) ni la parte de los dividendos que amortiza el crédito. Si un mes se ve raro, tócalo arriba en el gráfico de columnas para ver sus movimientos.',
+    table: dataTable(['Mes', 'Ingresos líquidos', 'Consumo', 'Ahorro'], months.map((ym, i) => [M.monthName(ym), M.fmt(inc[i], base), M.fmt(exp[i], base), M.fmt(inc[i] - exp[i], base, { sign: true })]).reverse()),
+    footnote: 'Ingresos líquidos: los recurrentes (sin herencias ni regalos) menos los descuentos del sueldo (impuesto, salud, AFP, seguro de cesantía). El consumo no cuenta como gasto lo que en realidad es ahorro: los aportes a una inversión asociada a su categoría ni la parte de los dividendos que amortiza el crédito. Si un mes se ve raro, tócalo arriba en el gráfico de columnas para ver sus movimientos.',
   });
 }
 

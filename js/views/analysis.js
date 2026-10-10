@@ -4,7 +4,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import { fill, h } from '../ui.js';
-import { lineChart, vizCard, dataTable, shareBar, compactMoney } from '../charts.js';
+import { lineChart, vizCard, dataTable, shareBar, compactMoney, legend } from '../charts.js';
 import { openCategoryDetail } from './reports.js';
 
 const pct = (x, d = 0) => (x == null || !Number.isFinite(x) ? '—' : `${new Intl.NumberFormat('es-CL', { maximumFractionDigits: d }).format(x * 100)}%`);
@@ -34,17 +34,24 @@ export function healthCard() {
     h('div', { class: 'card-head' }, h('div', null, h('h3', null, 'Salud financiera'), h('div', { class: 'muted small' }, 'Últimos 12 meses · tu parte'))),
     h('div', { class: 'health-grid' },
       item('Tasa de ahorro', pct(s.value), level(s.value, 0.2, 0.1),
-        `${c(s.saved)} de ${c(s.income)}. Cuenta como ahorro la AFP (${c(s.invest)}) y lo que amortizas de los créditos (${c(s.amort)}).`,
+        `${c(s.saved)} de ${c(s.income)} líquidos. Cuenta como ahorro lo que amortizas de los créditos (${c(s.amort)})${s.invest ? ` y tus aportes a inversiones (${c(s.invest)})` : ''}.`,
         'Referencia: 20% o más.', 'Revisa en "Este año vs el anterior" qué categorías subieron.'),
       item('Fondo de emergencia', e.value == null ? '—' : months1(e.value), level(e.value, 6, 3),
         `${c(e.liquid)} en cuentas; sales ${c(e.monthly)} al mes (gasto + dividendos).`,
         'Referencia: 3 a 6 meses.', e.monthly ? `Para 3 meses te faltan ${c(Math.max(0, 3 * e.monthly - e.liquid))}.` : null),
       item('Dividendos sobre ingreso', pct(m.value), level(m.value, 0.25, 0.3, true),
-        `${c(m.dividend)} al mes de ${c(m.income)} de ingreso promedio${m.fixedOnly != null ? `; ${pct(m.fixedOnly)} solo con el sueldo` : ''}.`,
-        'Los bancos en Chile piden 25%, hasta 30%.', 'Un arriendo lo baja: simúlalo abajo en la caja.'),
+        `${c(m.dividend)} al mes de ${c(m.income)} líquidos en promedio${m.fixedOnly != null ? `; ${pct(m.fixedOnly)} sin el bono anual` : ''}.`,
+        'Los bancos en Chile piden 25%, hasta 30%.', rentHint(m, c)),
       item('Endeudamiento', pct(l.value), level(l.value, 0.5, 0.8, true),
         `Debes ${c(l.debts)} de ${c(l.assets)} en activos.`,
         'Bajo 50% es holgado; los créditos hipotecarios lo suben al comienzo.')));
+}
+
+// Con el arriendo simulado abajo, la carga de los dividendos se mide sobre el líquido más el arriendo neto.
+function rentHint(m, c) {
+  if (!fcView.rent || !fcView.uf || !m.income) return 'Un arriendo lo baja: simúlalo abajo en la caja.';
+  const net = fcView.uf * (M.rateFor('UF', M.todayStr()) || 0) * (1 - (fcView.adminPct || 0) / 100);
+  return net ? `Con el arriendo simulado (${c(net)} netos al mes): ${pct(m.dividend / (m.income + net))}.` : null;
 }
 
 // ---- Proyección de caja ----------------------------------------------------------------------
@@ -68,10 +75,13 @@ export function forecastCard(redraw) {
     props.map(p => h('option', { value: p.id, selected: p.id === prop.id }, p.name))) : null;
   const rent = fcView.rent ? { uf: fcView.uf, adminPct: fcView.adminPct, from: fcView.from } : null;
   const f = M.cashForecast({ months: 12, rent });
+  const f0 = rent ? M.cashForecast({ months: 12 }) : null;      // sin arriendo, para comparar
   // parte en hoy (la liquidez actual) y sigue mes a mes
   const pts = [{ short: 'hoy', long: 'Hoy', ym: M.curYm() }, ...f.rows.map(r => ({ short: M.monthShort(r.ym).toLowerCase(), long: M.monthName(r.ym), ym: r.ym }))];
   const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
-  const msg = forecastMessage(f);
+  const c = (v) => compactMoney(v, base);
+  const low0 = f0 && f0.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f0.rows[0]);
+  const msg = forecastMessage(f) + (f0 ? ` Sin el arriendo: ${low0.balance < 0 ? `bajaría hasta ${c(low0.balance)}` : `no baja de ${c(low0.balance)}`} y tendrías ${c(f0.rows.at(-1).balance)} (${c(f.rows.at(-1).balance - f0.rows.at(-1).balance)} menos).` : '');
   const num = (key, label, step) => h('label', { class: 'fc-field' }, h('span', null, label),
     h('input', { type: 'text', inputmode: 'decimal', value: String(fcView[key]).replace('.', ','), onchange: (e) => { const v = M.parseAmount(e.target.value); if (Number.isFinite(v)) { fcView[key] = v; fcView.touched = true; redraw(); } } }));
   const scen = prop ? h('div', { class: 'fc-scen' },
@@ -85,9 +95,11 @@ export function forecastCard(redraw) {
     subtitle: 'Tus cuentas: ingresos y gastos típicos, dividendos exactos de cada crédito',
     chart: h('div', null,
       h('p', { class: 'pace-msg' + (low.balance < 0 ? ' up-bad' : '') }, msg),
+      f0 ? legend([{ name: 'Con arriendo', color: '--viz-1' }, { name: 'Sin arriendo', color: '--viz-deemph', dash: true }]) : null,
       lineChart({
         points: pts, cur: base,
-        series: [{ name: 'Caja proyectada', values: [f.liquid, ...f.rows.map(r => r.balance)], color: '--viz-1', area: true }],
+        series: [{ name: f0 ? 'Con arriendo' : 'Caja proyectada', values: [f.liquid, ...f.rows.map(r => r.balance)], color: '--viz-1', area: true },
+          ...(f0 ? [{ name: 'Sin arriendo', values: [f0.liquid, ...f0.rows.map(r => r.balance)], color: '--viz-deemph', dash: true }] : [])],
         extra: (i) => {
           if (!i) return [{ value: M.fmt(f.liquid, base), label: 'Liquidez de hoy' }];
           const r = f.rows[i - 1];
@@ -99,7 +111,7 @@ export function forecastCard(redraw) {
       }),
       scen),
     table: dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])),
-    footnote: `Parte con tu liquidez de hoy (${compactMoney(f.liquid, base)}: cuentas menos tarjetas). Ingresos: ${compactMoney(f.incomeBase, base)} al mes${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${compactMoney(v, base)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${compactMoney(f.spendBase, base)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
+    footnote: `Parte con tu liquidez de hoy (${compactMoney(f.liquid, base)}: cuentas menos tarjetas). Ingresos: ${compactMoney(f.incomeBase, base)} líquidos al mes${f.deductions ? ` (ya sin ${compactMoney(f.deductions, base)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${compactMoney(v, base)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${compactMoney(f.spendBase, base)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
   });
 }
 

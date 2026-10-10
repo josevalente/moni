@@ -129,6 +129,7 @@ export function editCategory(c) {
   const people = M.people();
   const groups = [...new Set(M.categories().map(x => x.group).filter(Boolean))];
   const val = { kind: 'expense', defaultAlloc: 'none', splitMode: 'prop', ...(c || {}) };
+  val.payroll = M.isPayrollDeduction({ kind: 'expense', ...val });     // propuesta según el nombre si no se ha marcado
   const fm = formModal({
     title: isNew ? 'Nueva categoría' : 'Editar categoría', value: val,
     fields: [
@@ -162,6 +163,8 @@ export function editCategory(c) {
       { key: 'debtId', label: 'Es el dividendo del crédito', type: 'select', show: (v) => v.kind === 'expense', options: [{ v: '', l: '— no —' }, ...db.all('debts').filter(d => d.mortgage).map(d => ({ v: d.id, l: d.name }))],
         hint: 'Del dividendo, la amortización baja la deuda (es ahorro); solo el interés y los seguros cuentan como gasto.' },
       { key: 'extraordinary', label: 'Ingreso extraordinario (herencias, regalos, ventas puntuales)', type: 'check', show: (v) => v.kind === 'income', hint: 'Se muestra aparte de los ingresos recurrentes.' },
+      { key: 'payroll', label: 'Descuento del sueldo (impuesto, salud, AFP, seguro de cesantía)', type: 'check', show: (v) => v.kind === 'expense',
+        hint: 'Si anotas el sueldo bruto: estos se restan del ingreso para tener el líquido (no son consumo).' },
       { key: 'invId', label: 'Sumar como aporte a la inversión', type: 'select', options: [{ v: '', l: '— ninguna —' }, ...invOptions(c)],
         hint: 'Cada gasto de esta categoría (pasado y futuro) cuenta como aporte a esa inversión, y cada ingreso como retiro. Ej: la categoría AFP y tu inversión AFP.' },
       { key: 'invFrom', label: 'Contar desde (opcional)', type: 'date', show: (v) => !!v.invId, hint: 'Vacío: todo el historial de la categoría.' },
@@ -173,6 +176,7 @@ export function editCategory(c) {
       if (!v.invId) { delete v.invId; delete v.invFrom; } else if (!v.invFrom) delete v.invFrom;
       if (!v.debtId || v.kind !== 'expense') delete v.debtId;
       if (!v.extraordinary || v.kind !== 'income') delete v.extraordinary;
+      if (v.kind !== 'expense') delete v.payroll; else v.payroll = !!v.payroll;
       const saved = await db.put('categories', v);
       if (v.invId && (v.invId !== (c && c.invId) || v.invFrom !== (c && c.invFrom))) await afterLink(saved);
       else toast('Categoría guardada');

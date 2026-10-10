@@ -886,15 +886,21 @@ export function realFactor(ym) {
 }
 const median = (vals) => { const v = [...vals].sort((a, b) => a - b); const k = v.length; return k ? (k % 2 ? v[(k - 1) / 2] : (v[k / 2 - 1] + v[k / 2]) / 2) : 0; };
 
-// Ahorro de un mes = ingresos recurrentes − consumo. Lo que hoy figura como gasto pero es ahorro cuenta como
-// ahorro: los aportes a una inversión asociada a su categoría (ej. la AFP) y la amortización de los créditos
-// (que ya no está en el gasto). "mine" = mi parte.
+// Descuentos del sueldo (impuesto, salud, AFP, seguro de cesantía): quien anota el sueldo bruto los anota como
+// gasto. Se reconocen por el nombre de la categoría o porque se marcó así en ella (`payroll`). Bruto − descuentos
+// = líquido, que es lo que llega a la cuenta y lo que miran los bancos para la carga de los dividendos.
+const PAYROLL_RE = /\b(afp|isapre|fonasa|impuesto (unico|a la renta|renta)|seguro (de )?(cesantia|desempleo)|cotizacion(es)? (de )?(salud|prevision\w*))\b/;
+export const isPayrollDeduction = (cat) => !!cat && cat.kind === 'expense' && (cat.payroll ?? PAYROLL_RE.test(normKey(cat.name)));
+
+// Ahorro de un mes = ingresos líquidos (recurrentes menos los descuentos del sueldo) − consumo. Lo que figura
+// como gasto pero es ahorro cuenta como ahorro: los aportes a una inversión asociada a su categoría y la
+// amortización de los créditos. "mine" = mi parte.
 export function savingsOfMonth(ym, mode = 'total') {
   const ps = people();
   const { pct } = splitFor(ym);
   const me = meId();
   const income = incomeOfMonth(ym, mode === 'mine' ? me : null, { extraordinary: false });
-  let spend = 0, invest = 0, amort = 0;
+  let spend = 0, invest = 0, amort = 0, deductions = 0;
   for (const tx of txsInMonth(ym)) {
     if (tx.kind !== 'out' && tx.kind !== 'in') continue;
     const cat = category(tx.categoryId);
@@ -904,13 +910,15 @@ export function savingsOfMonth(ym, mode = 'total') {
       const sh = shares(tx, cat, pct, ps);
       if (sh) b *= (sh[me] || 0); else if (tx.paidBy !== me) continue;
     }
+    if (isPayrollDeduction(cat)) { deductions += b; continue; }
     if (cat.invId) { invest += b; continue; }
     const a = cat.debtId ? amortShare(tx, cat) : 0;
     amort += b * a;
     spend += b * (1 - a);
   }
-  const saved = income - spend;
-  return { ym, income, spend, invest, amort, saved, rate: income ? saved / income : null };
+  const net = income - deductions;
+  const saved = net - spend;
+  return { ym, income, deductions, net, spend, invest, amort, saved, rate: net > 0 ? saved / net : null };
 }
 
 // Proyección de caja de los próximos meses para las cuentas del dueño:
@@ -924,16 +932,18 @@ export function cashForecast({ months = 12, rent = null } = {}) {
   const owner = ownerId();
   const closed = monthsBetween(addMonths(cur, -12), addMonths(cur, -1));
   const debtCats = new Set(db.all('categories').filter(c => c.debtId).map(c => c.id));
-  const ownSpend = (ym) => {
-    const r = spendingByCategory(ym, 'mine', owner);
-    // sin los dividendos (van exactos aparte); la AFP y otros aportes sí quedan: también salen de la cuenta
-    return r.total - r.rows.filter(x => debtCats.has(x.cat.id)).reduce((a, x) => a + x.v, 0);
-  };
-  const incSeries = closed.map(ym => incomeOfMonth(ym, owner, { extraordinary: false }));
+  const sp = closed.map(ym => spendingByCategory(ym, 'mine', owner));
+  const sumOf = (r, f) => r.rows.filter(x => f(x.cat)).reduce((a, x) => a + x.v, 0);
+  const dedSeries = sp.map(r => sumOf(r, isPayrollDeduction));
+  // gasto: sin los dividendos (van exactos aparte) ni los descuentos del sueldo (el ingreso ya es líquido);
+  // los aportes a inversiones sí quedan: también salen de la cuenta
+  const ownSpend = (i) => sp[i].total - sumOf(sp[i], c => debtCats.has(c.id)) - dedSeries[i];
+  const incSeries = closed.map((ym, i) => incomeOfMonth(ym, owner, { extraordinary: false }) - dedSeries[i]);
   const incomeBase = median(incSeries);
   const lumps = new Map();
   closed.forEach((ym, i) => { const extra = incSeries[i] - incomeBase; if (extra > Math.max(incomeBase, 1)) lumps.set(ym.slice(5), extra); });
-  const spendBase = closed.reduce((a, ym) => a + ownSpend(ym), 0) / closed.length;
+  const spendBase = closed.reduce((a, ym, i) => a + ownSpend(i), 0) / closed.length;
+  const deductions = median(dedSeries);
   const today = todayStr();
   const uf0 = rateFor('UF', today) || 1, uf12 = rateFor('UF', addDays(today, -365)) || uf0;
   const g = Math.pow(uf0 / uf12, 1 / 12);
@@ -963,7 +973,7 @@ export function cashForecast({ months = 12, rent = null } = {}) {
     rows.push({ ym, income, lump: lumps.get(ym.slice(5)) || 0, spend, dividends, div, rent: rentNet, net, balance });
   }
   const yearIncome = incSeries.reduce((a, v) => a + v, 0);
-  return { incomeBase, yearIncome, lumps: [...lumps.entries()], spendBase, liquid, inflation: Math.pow(g, 12) - 1, rows };
+  return { incomeBase, yearIncome, deductions, lumps: [...lumps.entries()], spendBase, liquid, inflation: Math.pow(g, 12) - 1, rows };
 }
 
 // Indicadores de salud financiera con su referencia (tasa de ahorro, fondo de emergencia, carga de los
@@ -972,7 +982,7 @@ export function healthIndicators() {
   const cur = curYm();
   const months = monthsBetween(addMonths(cur, -12), addMonths(cur, -1));
   const sv = months.map(ym => savingsOfMonth(ym, 'mine'));
-  const inc = sv.reduce((a, x) => a + x.income, 0), saved = sv.reduce((a, x) => a + x.saved, 0);
+  const inc = sv.reduce((a, x) => a + x.net, 0), saved = sv.reduce((a, x) => a + x.saved, 0);
   const fc = cashForecast({ months: 3 });
   const nextDiv = median(fc.rows.map(r => r.div));                // dividendo de un mes normal (sin la 1ª cuota)
   const monthlyOut = fc.spendBase + nextDiv;
@@ -980,9 +990,9 @@ export function healthIndicators() {
   const assets = nw.cash + nw.inv + nw.props + Math.max(0, nw.points);
   const debts = -nw.cards - nw.debts;
   return {
-    savings: { value: inc ? saved / inc : null, saved, income: inc, invest: sv.reduce((a, x) => a + x.invest, 0), amort: sv.reduce((a, x) => a + x.amort, 0) },
+    savings: { value: inc > 0 ? saved / inc : null, saved, income: inc, deductions: sv.reduce((a, x) => a + x.deductions, 0), invest: sv.reduce((a, x) => a + x.invest, 0), amort: sv.reduce((a, x) => a + x.amort, 0) },
     emergency: { value: monthlyOut ? Math.max(0, fc.liquid) / monthlyOut : null, liquid: fc.liquid, monthly: monthlyOut },
-    // sobre el ingreso mensual promedio del año (incluye un reparto anual); también solo con el ingreso fijo
+    // sobre el ingreso líquido mensual promedio del año (incluye un bono anual); también solo con el mensual
     mortgage: { value: fc.yearIncome ? nextDiv / (fc.yearIncome / 12) : null, dividend: nextDiv, income: fc.yearIncome / 12, fixedOnly: fc.incomeBase ? nextDiv / fc.incomeBase : null },
     leverage: { value: assets ? debts / assets : null, debts, assets },
   };
