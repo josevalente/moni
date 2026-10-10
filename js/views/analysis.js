@@ -57,43 +57,38 @@ function rentHint(m, c) {
 // ---- Proyección de caja ----------------------------------------------------------------------
 // comisión típica de las administradoras de arriendo: un mes de arriendo al año (8,33%)
 const fcView = { rent: false, uf: null, adminPct: 8.33, from: null, propId: null };
-export function forecastCard(redraw) {
+export function forecastCard(onScenario) {
   const base = M.base();
+  const c = (v) => compactMoney(v, base);
   // por defecto la que ya tiene arriendo; si no, la más antigua (la que se suele arrendar al mudarse)
   const since = (p) => { const d = p.mortgageId && db.get('debts', p.mortgageId); return (d && d.mortgage && d.mortgage.from) || '9999'; };
   const props = M.propertySummaries().sort((a, b) => (b.rentUF ? 1 : 0) - (a.rentUF ? 1 : 0) || since(a).localeCompare(since(b)));
-  const prop = props.find(p => p.id === fcView.propId) || props[0];
+  const propOf = () => props.find(p => p.id === fcView.propId) || props[0];
   if (!fcView.from) fcView.from = M.addMonths(M.curYm(), 3);
   // arriendo de partida: el anotado en la propiedad o ~0,4% mensual de su valor, en UF
-  if (prop && !fcView.touched && !prop.rentUF) {
+  const defaults = () => {
+    const prop = propOf();
+    if (!prop || fcView.touched) return;
+    if (prop.rentUF) { fcView.uf = prop.rentUF; fcView.adminPct = prop.adminPct ?? fcView.adminPct; return; }
     const uf = M.rateFor('UF', M.todayStr());
     const valUF = prop.currency === 'UF' ? prop.value : uf ? prop.value * (M.rateFor(prop.currency, M.todayStr()) ?? 1) / uf : null;
     fcView.uf = valUF ? Math.max(1, Math.round(valUF * 0.004)) : (fcView.uf || 10);
-  }
-  if (prop && prop.rentUF && !fcView.touched) { fcView.uf = prop.rentUF; fcView.adminPct = prop.adminPct ?? fcView.adminPct; }
-  const propPick = props.length > 1 ? h('select', { 'aria-label': 'Propiedad', onchange: (e) => { fcView.propId = e.target.value; fcView.touched = false; redraw(); } },
-    props.map(p => h('option', { value: p.id, selected: p.id === prop.id }, p.name))) : null;
-  const rent = fcView.rent ? { uf: fcView.uf, adminPct: fcView.adminPct, from: fcView.from } : null;
-  const f = M.cashForecast({ months: 12, rent });
-  const f0 = rent ? M.cashForecast({ months: 12 }) : null;      // sin arriendo, para comparar
-  // parte en hoy (la liquidez actual) y sigue mes a mes
-  const pts = [{ short: 'hoy', long: 'Hoy', ym: M.curYm() }, ...f.rows.map(r => ({ short: M.monthShort(r.ym).toLowerCase(), long: M.monthName(r.ym), ym: r.ym }))];
-  const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
-  const c = (v) => compactMoney(v, base);
-  const low0 = f0 && f0.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f0.rows[0]);
-  const msg = forecastMessage(f) + (f0 ? ` Sin el arriendo: ${low0.balance < 0 ? `bajaría hasta ${c(low0.balance)}` : `no baja de ${c(low0.balance)}`} y tendrías ${c(f0.rows.at(-1).balance)} (${c(f.rows.at(-1).balance - f0.rows.at(-1).balance)} menos).` : '');
-  const num = (key, label, step) => h('label', { class: 'fc-field' }, h('span', null, label),
-    h('input', { type: 'text', inputmode: 'decimal', value: String(fcView[key]).replace('.', ','), onchange: (e) => { const v = M.parseAmount(e.target.value); if (Number.isFinite(v)) { fcView[key] = v; fcView.touched = true; redraw(); } } }));
-  const scen = prop ? h('div', { class: 'fc-scen' },
-    h('label', { class: 'field check' }, h('input', { type: 'checkbox', checked: fcView.rent, onchange: (e) => { fcView.rent = e.target.checked; redraw(); } }), h('span', null, propPick ? 'Simular un arriendo' : `Simular arriendo de ${prop.name}`)),
-    fcView.rent && propPick ? propPick : null,
-    fcView.rent ? h('div', { class: 'fc-fields' },
-      num('uf', 'Arriendo (UF)'), num('adminPct', 'Comisión (%)'),
-      h('label', { class: 'fc-field' }, h('span', null, 'Desde'), h('input', { type: 'month', value: fcView.from, onchange: (e) => { if (e.target.value) { fcView.from = e.target.value; redraw(); } } }))) : null) : null;
-  return vizCard({
-    title: 'Caja de los próximos 12 meses',
-    subtitle: 'Tus cuentas: ingresos y gastos típicos, dividendos exactos de cada crédito',
-    chart: h('div', null,
+  };
+  defaults();
+
+  // lo que cambia con el escenario: mensaje, gráfico y tabla. Los controles del arriendo no se vuelven a crear
+  // (en el iPhone, recrear un campo cierra su selector o el teclado mientras se está usando).
+  const live = h('div');
+  const tableBox = h('div');
+  const draw = () => {
+    const rent = fcView.rent && fcView.uf ? { uf: fcView.uf, adminPct: fcView.adminPct, from: fcView.from } : null;
+    const f = M.cashForecast({ months: 12, rent });
+    const f0 = rent ? M.cashForecast({ months: 12 }) : null;      // sin arriendo, para comparar
+    const pts = [{ short: 'hoy', long: 'Hoy', ym: M.curYm() }, ...f.rows.map(r => ({ short: M.monthShort(r.ym).toLowerCase(), long: M.monthName(r.ym), ym: r.ym }))];
+    const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
+    const low0 = f0 && f0.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f0.rows[0]);
+    const msg = forecastMessage(f) + (f0 ? ` Sin el arriendo: ${low0.balance < 0 ? `bajaría hasta ${c(low0.balance)}` : `no baja de ${c(low0.balance)}`} y tendrías ${c(f0.rows.at(-1).balance)} (${c(f.rows.at(-1).balance - f0.rows.at(-1).balance)} menos).` : '');
+    fill(live,
       h('p', { class: 'pace-msg' + (low.balance < 0 ? ' up-bad' : '') }, msg),
       f0 ? legend([{ name: 'Con arriendo', color: '--viz-1' }, { name: 'Sin arriendo', color: '--viz-deemph', dash: true }]) : null,
       lineChart({
@@ -108,10 +103,48 @@ export function forecastCard(redraw) {
             { value: M.fmt(r.net, base, { sign: true }), label: 'Neto del mes' }].filter(Boolean);
         },
         ariaLabel: `Caja proyectada: ${msg}`,
-      }),
-      scen),
-    table: dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])),
-    footnote: `Parte con tu liquidez de hoy (${compactMoney(f.liquid, base)}: cuentas menos tarjetas). Ingresos: ${compactMoney(f.incomeBase, base)} líquidos al mes${f.deductions ? ` (ya sin ${compactMoney(f.deductions, base)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${compactMoney(v, base)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${compactMoney(f.spendBase, base)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
+      }));
+    fill(tableBox, dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])));
+    return f;
+  };
+  const changed = () => { draw(); if (onScenario) onScenario(); };
+
+  // controles del escenario (se crean una sola vez)
+  let scen = null;
+  if (props.length) {
+    const ufIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Arriendo en UF' });
+    const admIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Comisión en %' });
+    const showVals = () => { ufIn.value = String(fcView.uf ?? '').replace('.', ','); admIn.value = String(fcView.adminPct ?? '').replace('.', ','); };
+    showVals();
+    // se recalcula al escribir (sin redibujar los campos)
+    const onNum = (key, el) => el.addEventListener('input', () => { const v = M.parseAmount(el.value); if (Number.isFinite(v) && v >= 0) { fcView[key] = v; fcView.touched = true; changed(); } });
+    onNum('uf', ufIn); onNum('adminPct', admIn);
+    const fromIn = h('input', { type: 'month', value: fcView.from, 'aria-label': 'Desde' });
+    const onFrom = () => { if (fromIn.value && fromIn.value !== fcView.from) { fcView.from = fromIn.value; changed(); } };
+    fromIn.addEventListener('input', onFrom); fromIn.addEventListener('change', onFrom);
+    const fields = h('div', { class: 'fc-fields', hidden: !fcView.rent },
+      h('label', { class: 'fc-field' }, h('span', null, 'Arriendo (UF)'), ufIn),
+      h('label', { class: 'fc-field' }, h('span', null, 'Comisión (%)'), admIn),
+      h('label', { class: 'fc-field' }, h('span', null, 'Desde'), fromIn));
+    const propPick = props.length > 1 ? h('select', { 'aria-label': 'Propiedad', hidden: !fcView.rent, onchange: (e) => { fcView.propId = e.target.value; fcView.touched = false; defaults(); showVals(); changed(); } },
+      props.map(p => h('option', { value: p.id, selected: p.id === propOf().id }, p.name))) : null;
+    const box = h('input', { type: 'checkbox', checked: fcView.rent, onchange: (e) => {
+      fcView.rent = e.target.checked;
+      fields.hidden = !fcView.rent; if (propPick) propPick.hidden = !fcView.rent;
+      changed();
+    } });
+    scen = h('div', { class: 'fc-scen' },
+      h('label', { class: 'field check' }, box, h('span', null, propPick ? 'Simular un arriendo' : `Simular arriendo de ${props[0].name}`)),
+      propPick, fields);
+  }
+
+  const f = draw();
+  return vizCard({
+    title: 'Caja de los próximos 12 meses',
+    subtitle: 'Tus cuentas: ingresos y gastos típicos, dividendos exactos de cada crédito',
+    chart: h('div', null, live, scen),
+    table: tableBox,
+    footnote: `Parte con tu liquidez de hoy (${c(f.liquid)}: cuentas menos tarjetas). Ingresos: ${c(f.incomeBase)} líquidos al mes${f.deductions ? ` (ya sin ${c(f.deductions)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${c(v)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${c(f.spendBase)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
   });
 }
 

@@ -4,7 +4,7 @@
 // Actualizaciones atómicas: cada versión se descarga completa al instalarse (saltándose la caché del
 // CDN con ?v=VERSION) y se sirve solo desde su propia caché. Nunca se mezclan archivos de dos versiones.
 // Sube VERSION cada vez que publiques cambios.
-const VERSION = 'moni-v23';
+const VERSION = 'moni-v24';
 // el lector de comprobantes (se descarga la primera vez que se usa) queda en su propia caché, entre versiones
 const OCR_CACHE = 'moni-ocr-5.1.1';
 const isOcrLib = (u) => u.startsWith('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/') || u.startsWith('https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/') || u.startsWith('https://cdn.jsdelivr.net/npm/tesseract.js-core@v5');
