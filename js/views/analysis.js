@@ -84,7 +84,8 @@ export function forecastCard(onScenario) {
     const rent = fcView.rent && fcView.uf ? { uf: fcView.uf, adminPct: fcView.adminPct, from: fcView.from } : null;
     const f = M.cashForecast({ months: 12, rent });
     const f0 = rent ? M.cashForecast({ months: 12 }) : null;      // sin arriendo, para comparar
-    const pts = [{ short: 'hoy', long: 'Hoy', ym: M.curYm() }, ...f.rows.map(r => ({ short: M.monthShort(r.ym).toLowerCase(), long: M.monthName(r.ym), ym: r.ym }))];
+    // hoy, el cierre de este mes (lo que queda de él) y cada mes siguiente
+    const pts = [{ short: 'hoy', long: 'Hoy', ym: M.curYm() }, ...f.rows.map(r => ({ short: M.monthShort(r.ym).toLowerCase(), long: r.partial ? `Fin de ${monthLow(r.ym)}` : M.monthName(r.ym), ym: r.ym }))];
     const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
     const low0 = f0 && f0.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f0.rows[0]);
     const msg = forecastMessage(f) + (f0 ? ` Sin el arriendo: ${low0.balance < 0 ? `bajaría hasta ${c(low0.balance)}` : `no baja de ${c(low0.balance)}`} y tendrías ${c(f0.rows.at(-1).balance)} (${c(f.rows.at(-1).balance - f0.rows.at(-1).balance)} menos).` : '');
@@ -98,13 +99,13 @@ export function forecastCard(onScenario) {
         extra: (i) => {
           if (!i) return [{ value: M.fmt(f.liquid, base), label: 'Liquidez de hoy' }];
           const r = f.rows[i - 1];
-          return [{ value: M.fmt(r.income, base), label: r.lump ? 'Ingresos (incl. el ingreso anual de este mes)' : 'Ingresos' }, { value: M.fmt(-r.spend, base), label: 'Gasto' },
+          return [{ value: M.fmt(r.income, base), label: (r.partial ? 'Ingresos que faltan' : 'Ingresos') + (r.lump ? ' (incl. el ingreso anual de este mes)' : '') }, { value: M.fmt(-r.spend, base), label: r.partial ? 'Gasto que falta' : 'Gasto' },
             r.div ? { value: M.fmt(-r.div, base), label: 'Dividendos' } : null, r.rent ? { value: M.fmt(r.rent, base), label: 'Arriendo neto' } : null,
             { value: M.fmt(r.net, base, { sign: true }), label: 'Neto del mes' }].filter(Boolean);
         },
         ariaLabel: `Caja proyectada: ${msg}`,
       }));
-    fill(tableBox, dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])));
+    fill(tableBox, dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [r.partial ? `Resto de ${monthLow(r.ym)}` : M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])));
     return f;
   };
   const changed = () => { draw(); if (onScenario) onScenario(); };
@@ -144,7 +145,7 @@ export function forecastCard(onScenario) {
     subtitle: 'Tus cuentas: ingresos y gastos típicos, dividendos exactos de cada crédito',
     chart: h('div', null, live, scen),
     table: tableBox,
-    footnote: `Parte con tu liquidez de hoy (${c(f.liquid)}: cuentas menos tarjetas). Ingresos: ${c(f.incomeBase)} líquidos al mes${f.deductions ? ` (ya sin ${c(f.deductions)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${c(v)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${c(f.spendBase)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
+    footnote: `Parte con tu liquidez de hoy (${c(f.liquid)}: cuentas menos tarjetas). Ingresos: ${c(f.incomeBase)} líquidos al mes${f.deductions ? ` (ya sin ${c(f.deductions)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${c(v)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${c(f.spendBase)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Gastos compartidos: cuenta tu parte (lo que pagas tú menos lo que le toca a la otra persona, más tu parte de lo que paga ella), que es lo que sale de tu cuenta con el cierre mensual. Este mes cuenta solo lo que falta. Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
   });
 }
 

@@ -953,6 +953,28 @@ export function cashForecast({ months = 12, rent = null } = {}) {
   const mortgages = db.all('debts').filter(d => d.mortgage && !d.archived);
   const rows = [];
   let balance = liquid;
+  // lo que queda del mes en curso: el ingreso típico que aún no llega (ej. el sueldo de fin de mes), el gasto
+  // típico que falta (sin bajar de cero) y los dividendos que vencen desde hoy hasta fin de mes
+  {
+    const spNow = spendingByCategory(cur, 'mine', owner);
+    const dedNow = sumOf(spNow, isPayrollDeduction);
+    const incNow = incomeOfMonth(cur, owner, { extraordinary: false }) - dedNow;
+    const spentNow = spNow.total - sumOf(spNow, c => debtCats.has(c.id)) - dedNow;
+    const lump = lumps.get(cur.slice(5)) || 0;
+    const income = Math.max(0, incomeBase + lump - incNow);
+    const spend = Math.max(0, spendBase - spentNow);
+    const dividends = [];
+    for (const d of mortgages) {
+      const n0 = cuotasPaid(d, today), n1 = cuotasPaid(d, monthEnd(cur));
+      let amt = 0;
+      for (let n = n0 + 1; n <= n1; n++) amt += d.mortgage.rows[n - 1][6];
+      if (amt) dividends.push({ name: d.name, amount: amt * (d.currency === 'UF' ? uf0 : (rateFor(d.currency, today) ?? 1)) });
+    }
+    const div = dividends.reduce((a, x) => a + x.amount, 0);
+    const net = income - spend - div;
+    balance += net;
+    rows.push({ ym: cur, partial: true, income, lump: Math.max(0, Math.min(lump, income)), spend, dividends, div, rent: 0, net, balance });
+  }
   for (let k = 1; k <= months; k++) {
     const ym = addMonths(cur, k);
     const uf = uf0 * Math.pow(g, k);
@@ -984,7 +1006,7 @@ export function healthIndicators() {
   const sv = months.map(ym => savingsOfMonth(ym, 'mine'));
   const inc = sv.reduce((a, x) => a + x.net, 0), saved = sv.reduce((a, x) => a + x.saved, 0);
   const fc = cashForecast({ months: 3 });
-  const nextDiv = median(fc.rows.map(r => r.div));                // dividendo de un mes normal (sin la 1ª cuota)
+  const nextDiv = median(fc.rows.filter(r => !r.partial).map(r => r.div));   // dividendo de un mes normal (sin la 1ª cuota)
   const monthlyOut = fc.spendBase + nextDiv;
   const nw = netWorth();
   const assets = nw.cash + nw.inv + nw.props + Math.max(0, nw.points);
