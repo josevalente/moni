@@ -48,7 +48,8 @@ export function healthCard() {
 }
 
 // ---- Proyección de caja ----------------------------------------------------------------------
-const fcView = { rent: false, uf: 33, adminPct: 8.33, from: null, propId: null };
+// comisión típica de las administradoras de arriendo: un mes de arriendo al año (8,33%)
+const fcView = { rent: false, uf: null, adminPct: 8.33, from: null, propId: null };
 export function forecastCard(redraw) {
   const base = M.base();
   // por defecto la que ya tiene arriendo; si no, la más antigua (la que se suele arrendar al mudarse)
@@ -56,6 +57,12 @@ export function forecastCard(redraw) {
   const props = M.propertySummaries().sort((a, b) => (b.rentUF ? 1 : 0) - (a.rentUF ? 1 : 0) || since(a).localeCompare(since(b)));
   const prop = props.find(p => p.id === fcView.propId) || props[0];
   if (!fcView.from) fcView.from = M.addMonths(M.curYm(), 3);
+  // arriendo de partida: el anotado en la propiedad o ~0,4% mensual de su valor, en UF
+  if (prop && !fcView.touched && !prop.rentUF) {
+    const uf = M.rateFor('UF', M.todayStr());
+    const valUF = prop.currency === 'UF' ? prop.value : uf ? prop.value * (M.rateFor(prop.currency, M.todayStr()) ?? 1) / uf : null;
+    fcView.uf = valUF ? Math.max(1, Math.round(valUF * 0.004)) : (fcView.uf || 10);
+  }
   if (prop && prop.rentUF && !fcView.touched) { fcView.uf = prop.rentUF; fcView.adminPct = prop.adminPct ?? fcView.adminPct; }
   const propPick = props.length > 1 ? h('select', { 'aria-label': 'Propiedad', onchange: (e) => { fcView.propId = e.target.value; fcView.touched = false; redraw(); } },
     props.map(p => h('option', { value: p.id, selected: p.id === prop.id }, p.name))) : null;

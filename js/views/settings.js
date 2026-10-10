@@ -278,6 +278,7 @@ export function editAccount(a) {
     fields: [
       { key: 'name', label: 'Nombre', type: 'text', required: true },
       { key: 'bank', label: 'Banco / institución', type: 'text' },
+      { key: 'last4', label: 'Últimos 4 dígitos (opcional)', type: 'text', hint: 'Para reconocer esta cuenta al leer un comprobante (📷 Comprobante al registrar).' },
       { key: 'type', label: 'Tipo', type: 'select', options: ACC_TYPES },
       { key: 'currency', label: 'Moneda', type: 'select', options: M.settings().currencies.map(c => ({ v: c.code, l: c.code })) },
       ...(isNew ? [{ key: '_opening', label: 'Saldo inicial', type: 'number', signed: true, hint: 'Usa ± para un saldo negativo (por ejemplo, la deuda de una tarjeta).' }] : []),
@@ -488,7 +489,7 @@ function renderBackup(root) {
           await db.wipe();
           // también las preferencias de este teléfono. Se vuelve a la bienvenida (importar un respaldo o empezar
           // de cero) en vez de crear personas nuevas que después se duplicarían al combinar
-          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt', 'moni.fcAlertHidden']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt', 'moni.fcAlertHidden', 'moni.receiptAcc', 'moni.accOpen']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
           location.hash = '#/'; toast('Datos borrados');
         }
       } }, 'Borrar todos los datos'))));
@@ -496,16 +497,16 @@ function renderBackup(root) {
 
 // ---------------------------------------------------------------- Apple Pay
 // Una app web no recibe datos de los atajos del iPhone directamente: el atajo copia la compra al
-// portapapeles y en Moni se pega con "📋 Pegar compra" (una sola vez por compra).
+// portapapeles y en Moni se pega con "📋 Pegar" (una sola vez por compra).
 function applePayHelp() {
   modal('Registrar desde Apple Pay', h('div', null,
-    h('p', null, 'Con un atajo del iPhone, cada vez que pagas con Apple Pay la compra (monto y comercio) queda copiada. Luego, en Moni tocas ＋ y "📋 Pegar compra": se completa el monto y el comercio, y las sugerencias ponen la categoría y la cuenta.'),
+    h('p', null, 'Con un atajo del iPhone, cada vez que pagas con Apple Pay la compra (monto y comercio) queda copiada. Luego, en Moni tocas ＋ y "📋 Pegar": se completa el monto y el comercio, y las sugerencias ponen la categoría y la cuenta.'),
     h('ol', { class: 'steps' },
       h('li', null, 'Abre la app Atajos › Automatización › Nueva automatización › Transacción.'),
       h('li', null, 'Elige tus tarjetas (Banco de Chile, Santander y otras de la lista de Apple Pay) y "Ejecutar inmediatamente".'),
       h('li', null, 'Agrega la acción "Texto" y escribe: MONI|', h('i', null, 'Monto'), '|', h('i', null, 'Comercio'), ' (toca para insertar las variables "Monto" y "Comercio" de la entrada del atajo).'),
       h('li', null, 'Agrega "Copiar al portapapeles". Opcional: "Mostrar notificación" con "Compra copiada para Moni".'),
-      h('li', null, 'Al pagar, abre Moni › ＋ › 📋 Pegar compra.')),
+      h('li', null, 'Al pagar, abre Moni › ＋ › 📋 Pegar.')),
     h('p', { class: 'muted small' }, 'Solo funciona con tarjetas en Apple Pay (Mercado Pago y BancoEstado no están). Si el monto llega en 0, revisa que la automatización tenga datos móviles y que el atajo use la variable "Monto". El portapapeles nunca sale de tu teléfono.')));
 }
 
@@ -522,7 +523,7 @@ export function renderMore(root, sub) {
     h('section', { class: 'card' },
       item('inversiones', '📈', 'Inversiones', 'Fondos, acciones, ETF, AFP, APV: valor, precios y dividendos'),
       item('propiedades', '🏠', 'Propiedades', 'Valor, crédito hipotecario, plusvalía y arriendo'),
-      item('puntos', '🎁', 'Puntos y millas', 'Dólares-Premio, LATAM Pass y otros programas'),
+      item('puntos', '🎁', 'Puntos y millas', 'Millas, puntos de tarjetas y otros programas'),
       item('deudas', '🤝', 'Deudas', 'Lo que debes o te deben, en cualquier moneda')),
     h('section', { class: 'card' },
       item('categorias', '🏷️', 'Categorías', 'Tus ítems de gasto: nombre, grupo, reparto'),

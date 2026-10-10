@@ -195,17 +195,88 @@ export function openTxForm(existing, defaults = {}) {
 
   // ---- sugerencias por descripción
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
-  async function pastePurchase() {
+  // ---- pegar: una compra del atajo de Apple Pay, el texto de un comprobante o la captura de uno
+  async function pasteAny() {
+    if (navigator.clipboard.read) {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const it of items) { const type = it.types.find(t => t.startsWith('image/')); if (type) return readReceiptImage(await it.getType(type)); }
+        for (const it of items) if (it.types.includes('text/plain')) return applyText(await (await it.getType('text/plain')).text());
+      } catch { /* algunos navegadores solo permiten leer texto */ }
+    }
     let text = '';
     try { text = await navigator.clipboard.readText(); } catch { toast('No se pudo leer el portapapeles'); return; }
+    applyText(text);
+  }
+  function applyText(text) {
+    const multi = /\n/.test(String(text).trim());
+    const r = multi || !/^moni\|/i.test(String(text).trim()) ? M.parseReceipt(text) : null;
+    if (r && (multi || r.date)) return applyReceipt(r);
     const p = M.parsePurchase(text);
-    if (!p) { toast('El portapapeles no tiene una compra (monto y comercio)'); return; }
+    if (!p) { toast('Lo copiado no tiene un monto (una compra o un comprobante)'); return; }
     s.desc = p.desc; descIn.value = p.desc;
     s.amount = numText(p.amount); amountIn.value = s.amount;
     updateEval(); updateFx();
     descIn.focus();
     updateSuggestions();          // con el comercio aparecen las sugerencias: un toque completa categoría y cuenta
   }
+  // foto o captura de un comprobante: se lee en el teléfono (la imagen no sale del dispositivo)
+  async function readReceiptImage(blob) {
+    if (!blob) return;
+    toast('Leyendo el comprobante…', { ms: 20000 });
+    let text = '';
+    try {
+      const { imageText } = await import('../ocr.js');
+      text = await imageText(blob);
+    } catch {
+      toast('No se pudo leer la imagen. La primera vez se necesita conexión para descargar el lector.');
+      return;
+    }
+    const r = M.parseReceipt(text);
+    if (!r) { toast('No encontré un monto en la imagen'); return; }
+    applyReceipt(r);
+  }
+  const RECEIPT_ACC = 'moni.receiptAcc';
+  function applyReceipt(r) {
+    const own = (k) => M.accountByDigits(r.accounts[k], r.currency);
+    const from = own('from'), to = own('to'), any = own('any');
+    // dos cuentas tuyas en el mismo comprobante: es una transferencia entre ellas
+    const kind = from && to && from.id !== to.id ? 'transfer' : r.kind;
+    if (kind !== s.kind) setKind(kind);
+    if (s.paidBy !== owner) setPayer(owner);       // el comprobante es de tu banco
+    s.payerTouched = true;
+    if (!lockAccount) {
+      let last = null;
+      try { last = usable(localStorage.getItem(RECEIPT_ACC)); } catch { /* ignore */ }
+      const acc0 = kind === 'transfer' ? from : kind === 'in' ? (to || any || from) : (from || any || to);
+      const id = (acc0 && acc0.id) || last;
+      if (id) setAccount(id);
+      if (kind === 'transfer') { s.toAccountId = to.id; s.accTouched = true; }
+    }
+    if (!s.accountId) s.currency = r.currency;
+    s.amount = numText(r.amount); amountIn.value = s.amount;
+    if (r.date) { s.date = r.date; dateIn.value = r.date; s.fxTouched = false; }
+    if (kind !== 'transfer') {
+      s.desc = r.desc; descIn.value = r.desc;
+      // categoría: el dividendo cuya cuota calza con el monto; si no, la que suele llevar esa descripción
+      const div = kind === 'out' ? M.dividendCategoryFor(r.amount, s.date) : null;
+      const sg = div ? null : M.suggestDescriptions(r.desc, kind, 1, me)[0];
+      if (div) { s.categoryId = div.id; s.allocTouched = false; resolveAlloc(); }
+      else if (sg && sg.count >= 2 && sg.cat) { s.categoryId = sg.cat.id; s.alloc = allocToState(sg.last.alloc); s.allocTouched = true; }
+    }
+    if (s.accountId) { try { localStorage.setItem(RECEIPT_ACC, s.accountId); } catch { /* ignore */ } }
+    updateEval(); updateFx(); render();
+    // ¿ya estaba registrado? mismo monto, misma cuenta, ±2 días
+    const near = (d) => Math.abs(Date.parse(d) - Date.parse(s.date)) <= 2 * 864e5;
+    // en ingresos también uno parecido (±25%): p. ej. el sueldo anotado en bruto y el comprobante con el líquido
+    const same = db.all('tx').filter(t => t.kind === kind && near(t.date) && (!s.accountId || !t.accountId || t.accountId === s.accountId));
+    const dup = same.find(t => Math.abs(t.amount - r.amount) < 0.5) || (kind === 'in' ? same.find(t => Math.abs(t.amount - r.amount) <= 0.25 * r.amount) : null);
+    const what = (t) => [M.category(t.categoryId) && M.category(t.categoryId).name, t.desc].filter(Boolean).join(' · ');
+    if (dup) toast(`Ojo: ya hay ${dup.amount === r.amount ? 'un movimiento' : 'uno parecido'} de ${M.fmt(dup.amount, dup.currency)} el ${dup.date.slice(8)}/${dup.date.slice(5, 7)}${what(dup) ? ` (${what(dup)})` : ''}. Revisa antes de guardar.`, { ms: 9000 });
+    else toast(`Comprobante leído: ${M.fmt(r.amount, s.currency)}${s.categoryId ? '' : '. Elige la categoría'}`);
+    if (kind !== 'transfer' && !s.categoryId) { descIn.focus(); updateSuggestions(); }
+  }
+  const fileIn = h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; readReceiptImage(f); } });
 
   function updateSuggestions() {
     const isFlow = s.kind === 'out' || s.kind === 'in';
@@ -366,9 +437,12 @@ export function openTxForm(existing, defaults = {}) {
     const cat = M.category(s.categoryId);
     const isFlow = s.kind === 'out' || s.kind === 'in';
     const parts = [];
+    // pegar lo copiado (compra del atajo de Apple Pay, comprobante o su captura) o elegir la foto de un comprobante
+    const canFill = !isEdit && s.kind !== 'settle';
     parts.push(h('div', { class: 'form-top' }, kindSel,
-      // compra copiada por el atajo de Apple Pay (Más › Registrar desde Apple Pay)
-      isFlow && !isEdit && navigator.clipboard && navigator.clipboard.readText ? h('button', { type: 'button', class: 'chip small paste-btn', onclick: pastePurchase }, '📋 Pegar compra') : null));
+      canFill && navigator.clipboard && navigator.clipboard.readText ? h('button', { type: 'button', class: 'chip small paste-btn', onclick: pasteAny }, '📋 Pegar') : null,
+      canFill ? h('button', { type: 'button', class: 'chip small', onclick: () => fileIn.click() }, '📷 Comprobante') : null,
+      fileIn));
     if (isFlow) parts.push(h('div', { class: 'desc-wrap' }, descIn, suggestBox));
     parts.push(h('div', { class: 'amount-row' }, amountIn, h('select', {
       class: 'cur', disabled: !!s.accountId, 'aria-label': 'Moneda', title: s.accountId ? 'La moneda la define la cuenta' : '',
@@ -388,7 +462,7 @@ export function openTxForm(existing, defaults = {}) {
           chipCats.map(c => h('button', { type: 'button', class: 'chip' + (c.id === s.categoryId ? ' on' : ''), 'aria-pressed': String(c.id === s.categoryId), onclick: () => { s.categoryId = c.id; resolvePayer(); resolveAlloc(); render(); } }, (c.icon ? c.icon + ' ' : '') + c.name)),
           h('button', { type: 'button', class: 'chip more', onclick: () => categoryPicker(s.kind, s.categoryId, (id) => { s.categoryId = id; resolvePayer(); resolveAlloc(); render(); }) }, 'Todas…'))));
 
-      // cuenta: las 2 más usadas, la actual, "Otra…" (con "Sin cuenta") y, si hay más personas, "Pagó Berni":
+      // cuenta: las 2 más usadas, la actual, "Otra…" (con "Sin cuenta") y, si hay más personas, "Pagó <persona>":
       // quien paga sin una de tus cuentas. Elegir una de tus cuentas vuelve a dejarte como pagador.
       const accIds = [...topAccounts];
       if (s.accountId && !accIds.includes(s.accountId)) accIds.unshift(s.accountId);

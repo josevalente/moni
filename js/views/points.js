@@ -1,4 +1,4 @@
-// Puntos y millas (Dólares-Premio, LATAM Pass…): saldo en su unidad, lo acumulado y lo canjeado.
+// Puntos y millas (de aerolíneas, de tarjetas…): saldo en su unidad, lo acumulado y lo canjeado.
 // No son inversión: no entran a los gráficos ni al total invertido, y suman al patrimonio solo si se pide.
 // Se guardan como inversiones de tipo 'points' (mismos registros: acumulé = aporte, canjeé = retiro,
 // "actualizar saldo" = ajuste por la diferencia).
@@ -40,7 +40,7 @@ export function editProgram(p) {
   formModal({
     title: isNew ? 'Nuevo programa' : 'Editar programa', value: p || { currency: 'Millas', type: 'points' },
     fields: [
-      { key: 'name', label: 'Nombre', type: 'text', required: true, placeholder: 'Ej: LATAM Pass' },
+      { key: 'name', label: 'Nombre', type: 'text', required: true, placeholder: 'Ej: millas de aerolínea' },
       { key: 'currency', label: 'Unidad', type: 'select', options: M.settings().currencies.map(c => ({ v: c.code, l: c.code + (c.convertible === false ? ' (puntos, sin tipo de cambio)' : '') })),
         hint: 'Para millas o puntos usa una unidad sin conversión (Más › Monedas). Dólares-Premio puede ir en USD.' },
       { key: 'pointValue', label: `Valor de 1 unidad en ${M.base()} (opcional)`, type: 'number', hint: 'Para estimar cuánto valen. Si la unidad es una moneda (USD), se usa su tipo de cambio.' },

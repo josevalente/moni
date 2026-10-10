@@ -29,7 +29,7 @@ export function editProperty(p) {
       { key: 'partnerId', label: 'Socio en la plusvalía (opcional)', type: 'select', options: [{ v: '', l: '— nadie —' }, ...M.people().map(x => ({ v: x.id, l: x.name }))],
         hint: 'Quien aportó a la compra o a los arreglos: al vender le corresponde la parte de la plusvalía proporcional a su aporte.' },
       { key: 'partnerContrib', label: 'Su aporte (en la moneda del valor)', type: 'number', show: (v) => !!v.partnerId },
-      { key: 'tag', label: 'Etiqueta de sus gastos (opcional)', type: 'text', placeholder: 'Ej: AvLC', hint: 'Los movimientos de "Contribuciones" con esta etiqueta se usan en la simulación de arriendo.' },
+      { key: 'tag', label: 'Etiqueta de sus gastos (opcional)', type: 'text', placeholder: 'Ej: Depto centro', hint: 'Los movimientos de "Contribuciones" con esta etiqueta se usan en la simulación de arriendo.' },
       { key: 'rentUF', label: 'Arriendo mensual estimado (opcional)', type: 'number' },
       { key: 'adminPct', label: 'Comisión de administración (%)', type: 'number', show: (v) => !!v.rentUF, hint: 'Ej: 7% + IVA = 8,33.' },
       { key: 'archived', label: 'Archivada (vendida)', type: 'check' },

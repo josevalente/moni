@@ -4,10 +4,13 @@
 // Actualizaciones atómicas: cada versión se descarga completa al instalarse (saltándose la caché del
 // CDN con ?v=VERSION) y se sirve solo desde su propia caché. Nunca se mezclan archivos de dos versiones.
 // Sube VERSION cada vez que publiques cambios.
-const VERSION = 'moni-v21';
+const VERSION = 'moni-v22';
+// el lector de comprobantes (se descarga la primera vez que se usa) queda en su propia caché, entre versiones
+const OCR_CACHE = 'moni-ocr-5.1.1';
+const isOcrLib = (u) => u.startsWith('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/') || u.startsWith('https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/') || u.startsWith('https://cdn.jsdelivr.net/npm/tesseract.js-core@v5');
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
-  './js/main.js', './js/db.js', './js/model.js', './js/fx.js', './js/prices.js', './js/ui.js', './js/charts.js',
+  './js/main.js', './js/db.js', './js/model.js', './js/fx.js', './js/prices.js', './js/ui.js', './js/charts.js', './js/ocr.js',
   './js/views/home.js', './js/views/txs.js', './js/views/add.js', './js/views/close.js',
   './js/views/invest.js', './js/views/debts.js', './js/views/settings.js', './js/views/reports.js', './js/views/account.js', './js/views/points.js', './js/views/insights.js', './js/views/properties.js', './js/views/analysis.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-180.png',
@@ -31,7 +34,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
-    for (const k of await caches.keys()) if (k !== VERSION) await caches.delete(k);
+    for (const k of await caches.keys()) if (k !== VERSION && k !== OCR_CACHE) await caches.delete(k);
     await self.clients.claim();
   })());
 });
@@ -39,6 +42,17 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  if (isOcrLib(req.url)) {
+    e.respondWith((async () => {
+      const cache = await caches.open(OCR_CACHE);
+      const hit = await cache.match(req.url);
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok) cache.put(req.url, res.clone());
+      return res;
+    })());
+    return;
+  }
   const url = new URL(req.url);
   url.search = ''; url.hash = '';
   const isNav = req.mode === 'navigate' && url.href.startsWith(scope);

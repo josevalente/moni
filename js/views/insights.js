@@ -215,8 +215,8 @@ export function allocationCard() {
   return vizCard({
     title: 'Distribución de tus inversiones',
     subtitle: `Valor actual en ${base}: ¿qué tan concentrado estás en una moneda, un plazo o un tipo?`,
-    // una sección que reparte igual que otra ya mostrada no agrega información (hoy: AFP y APV son pesos,
-    // largo plazo y previsión a la vez)
+    // una sección que reparte igual que otra ya mostrada no agrega información (p. ej. si todo lo previsional
+    // está en pesos y a largo plazo)
     chart: h('div', null, (() => {
       const seen = new Set();
       return [['Por moneda', byCur], ['Por plazo', byHz], ['Por tipo', byKind]].map(([t, parts]) => {

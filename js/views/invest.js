@@ -109,7 +109,7 @@ async function removeEntry(e) {
 // ---- por cantidad: compra, venta, precio -------------------------------------------------
 
 // Compra o venta: se ingresa el precio por unidad (+ comisión) o el monto total de la operación, como lo
-// muestra la corredora (Zesty muestra el total); con el total se calcula el precio promedio por unidad.
+// muestra la corredora (muchas muestran el total); con el total se calcula el precio promedio por unidad.
 const TRADE_MODE = 'moni.tradeMode';
 function tradeForm(inv, kind, e = null) {
   const buy = kind === 'contrib';
@@ -339,7 +339,7 @@ export function editFund(f) {
     title: isNew ? 'Nueva inversión' : 'Editar inversión',
     value: { currency: M.base(), horizon: 'short', type: 'fund', assetKind: 'etf', priceSource: 'twelve', ...(f || {}) },
     fields: [
-      { key: 'name', label: 'Nombre', type: 'text', required: true, placeholder: 'Ej: VOO en Zesty' },
+      { key: 'name', label: 'Nombre', type: 'text', required: true, placeholder: 'Ej: VOO' },
       { key: 'type', label: 'Cómo la llevas', type: 'select', options: TYPES },
       { key: 'assetKind', label: 'Instrumento', type: 'select', options: ASSETS, show: (v) => v.type === 'units' },
       { key: 'priceSource', label: 'Precio', type: 'select', options: PX.SOURCES, show: (v) => v.type === 'units' },

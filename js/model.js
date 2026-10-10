@@ -122,6 +122,106 @@ export function parsePurchase(text) {
   return { amount, desc };
 }
 
+// ---- Comprobantes (texto de una foto o captura) -----------------------------------------------
+// Lee un comprobante bancario chileno ya convertido a texto (OCR en el teléfono): monto, fecha, si entra o sale
+// plata, contraparte y los últimos 4 dígitos de las cuentas que aparecen (para reconocer la tuya). Genérico:
+// funciona por etiquetas ("Monto", "Fecha movimiento", "Cuenta Origen"…), sin datos de ningún banco ni persona.
+const MES_IDX = { ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6, jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12 };
+function receiptDate(str) {
+  const t = stripAccents(String(str || '').toLowerCase());
+  let m = t.match(/\b(\d{1,2})\s*(?:de\s+)?(ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)[a-z]*\.?\s*(?:de\s+|del\s+)?(\d{4})\b/);
+  if (m) return `${m[3]}-${String(MES_IDX[m[2]]).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  m = t.match(/\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b/);
+  if (m && +m[2] <= 12 && +m[1] <= 31) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  m = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+const MONEY_RE = /(US\$|USD|\$|CLP)\s*(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?)/i;
+// "EMPRESA DEMO SPA" → "Empresa Demo"; "juana perez soto" → "Juana Perez Soto"
+function niceName(str) {
+  let t = String(str || '').replace(/\s+/g, ' ').trim()
+    .replace(/[,.]?\s*\b(s\.?\s?p\.?\s?a\.?|s\.?\s?a\.?|ltda\.?|limitada|e\.?i\.?r\.?l\.?|spa)\s*$/i, '').trim();
+  if (t === t.toUpperCase() || t === t.toLowerCase()) t = t.toLowerCase().replace(/(^|[\s(/-])(\p{L})/gu, (m0, a, b) => a + b.toUpperCase());
+  return t.slice(0, 60);
+}
+export function parseReceipt(text) {
+  const lines = String(text || '').split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const norm = (l) => stripAccents(l.toLowerCase());
+  // valor de una etiqueta: lo que sigue en la misma línea o, si está vacío, la línea siguiente
+  const field = (re) => {
+    for (let i = 0; i < lines.length; i++) {
+      const m = norm(lines[i]).match(re);
+      if (!m) continue;
+      const rest = lines[i].slice(m.index + m[0].length).replace(/^[\s:]+/, '').trim();
+      if (rest.length >= 2) return rest;
+      if (lines[i + 1]) return lines[i + 1];
+    }
+    return null;
+  };
+  const all = lines.join('\n');
+  // monto: el de la etiqueta "Monto"; si no, el primero con signo de moneda
+  const mf = field(/^(monto|importe|total)\b/);
+  const mm = (mf && mf.match(MONEY_RE)) || (mf && /^\d{1,3}(\.\d{3})+/.test(mf) && mf.match(/()(\d{1,3}(?:\.\d{3})+(?:,\d+)?)/)) || all.match(MONEY_RE);
+  if (!mm) return null;
+  const amount = parseAmount(mm[2]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const currency = /us\$|usd/i.test(mm[1] || '') ? 'USD' : 'CLP';
+  const date = receiptDate(field(/^fecha (de )?movimiento\b/)) || receiptDate(field(/^fecha contable\b/))
+    || receiptDate(field(/^fecha( y hora)?\b/)) || receiptDate(all);
+  const desc0 = field(/^(descripcion|glosa|detalle)\b/) || '';
+  const comment = field(/^(comentario|mensaje|asunto|motivo)\b/);
+  const provider = field(/^(nombre (del )?(proveedor|comercio|empresa)|comercio|proveedor)\b/);
+  const dest = field(/^nombre (del )?destinatario\b/);
+  const orig = field(/^nombre (del )?origen\b/);
+  const nd = norm(desc0), na = norm(all);
+  // ¿entra o sale? lo dice la descripción ("Traspaso de" / "Traspaso a") o el tipo de comprobante
+  const incoming = /\b(traspaso|transferencia) de\b|\babono\b|\brecibid[ao]\b|\bdeposito\b|\bte (transfirio|deposito)\b/.test(nd)
+    || (!nd && /\b(transferencia recibida|abono recibido|has recibido)\b/.test(na));
+  const kind = incoming ? 'in' : 'out';
+  const counterpart = incoming ? (orig || desc0.replace(/^.*?\bde:?\s*/i, '')) : (provider || dest || null);
+  let desc = counterpart ? niceName(counterpart) : desc0;
+  if (comment && incoming) desc = `${desc} · ${comment}`;
+  if (!desc) desc = desc0;
+  desc = desc.replace(/\s+/g, ' ').trim().slice(0, 80);
+  // cuentas: últimos 4 dígitos según su papel (de dónde sale / adónde llega)
+  const acct = { from: [], to: [], any: [] };
+  for (const l of lines) {
+    const n = norm(l);
+    if (!/\bcuenta\b|\bn[°º*o]?\.? de cuenta\b|\bcta\b/.test(n)) continue;
+    const digits = (l.match(/\d[\d\s.-]{2,}\d/g) || []).map(x => x.replace(/\D/g, '')).filter(x => x.length >= 4).map(x => x.slice(-4));
+    if (!digits.length) continue;
+    const role = /origen|cargo|desde/.test(n) ? 'from' : /destin|abono|hacia/.test(n) ? 'to' : 'any';
+    acct[role].push(...digits);
+  }
+  return { kind, amount, currency, date, desc, accounts: acct };
+}
+
+// Cuenta propia por sus últimos 4 dígitos (campo "last4" de la cuenta); si hay varias, la de esa moneda.
+export function accountByDigits(list, currency = null) {
+  for (const d of list || []) {
+    const hits = accounts().filter(a => !a.archived && a.last4 && String(a.last4).replace(/\D/g, '').slice(-4) === d);
+    if (hits.length) return (currency && hits.find(a => a.currency === currency)) || hits[0];
+  }
+  return null;
+}
+
+// Dividendo hipotecario: la categoría (con crédito asociado) cuya cuota de ese mes, en pesos, se parece al monto.
+export function dividendCategoryFor(amount, date) {
+  let best = null;
+  for (const c of db.all('categories')) {
+    const d = !c.archived && c.debtId && db.get('debts', c.debtId);
+    if (!d || !d.mortgage) continue;
+    const n = Math.max(1, cuotasPaid(d, addDays(date, 5)));
+    const row = d.mortgage.rows[n - 1];
+    const rate = d.currency === 'UF' ? rateFor('UF', date) : (rateFor(d.currency, date) ?? 1);
+    if (!row || !rate) continue;
+    const diff = Math.abs(row[6] * rate - amount) / amount;
+    if (diff < 0.06 && (!best || diff < best.diff)) best = { cat: c, diff };
+  }
+  return best ? best.cat : null;
+}
+
 // Monto con operaciones simples, como en las celdas del Excel: "7.000+6.900", "45.990-5.000", "12.500*2".
 // Cada número usa el formato chileno de parseAmount; * y / van antes que + y -.
 export const isAmountExpression = (str) => /[+*/x×÷]|\d\s*-/i.test(String(str ?? '').replace(/^\s*-/, ''));
@@ -815,7 +915,7 @@ export function savingsOfMonth(ym, mode = 'total') {
 
 // Proyección de caja de los próximos meses para las cuentas del dueño:
 // - ingresos: la mediana mensual de los recurrentes, más los ingresos grandes que se repiten cada año (ej. un
-//   reparto de utilidades en mayo) en el mismo mes que el año pasado;
+//   bono anual) en el mismo mes que el año pasado;
 // - gasto propio: el promedio de los últimos 12 meses (incluye contribuciones e impuestos anuales), sin los
 //   dividendos, que van exactos según la tabla de cada crédito (en UF, con la UF al ritmo del último año);
 // - si se indica, un arriendo. Parte con la liquidez de hoy (cuentas menos tarjetas).
@@ -943,7 +1043,7 @@ export function byDescription(txs) {
   return [...m.values()].sort((a, b) => b.total - a.total);
 }
 
-// Quién paga casi siempre una categoría (ej. "Gastos pagados por Berni"): si en el último año el 80% o más de
+// Quién paga casi siempre una categoría (ej. "Gastos que paga mi pareja"): si en el último año el 80% o más de
 // sus movimientos (al menos 5) los pagó la misma persona, se propone como pagador al elegirla.
 export function typicalPayer(catId, kind = 'out') {
   const since = addDays(todayStr(), -365);
@@ -960,7 +1060,7 @@ export function typicalPayer(catId, kind = 'out') {
 
 // ---- Asistentes: categoría propia para lo que se repite en "Otros" ----------------------------
 
-// Palabras de una descripción, sin tildes ni signos ("Starlink oct." → ["starlink", "oct"]).
+// Palabras de una descripción, sin tildes ni signos ("Netflix oct." → ["netflix", "oct"]).
 export const descWords = (desc) => normKey(desc || '').replace(/[^a-zñ ]+/g, ' ').split(' ').filter(Boolean);
 const startsWithWords = (w, pre) => pre.length <= w.length && pre.every((x, i) => w[i] === x);
 // palabras que por sí solas no dicen qué es ("pago", "cargo"…): no bastan para proponer una categoría
@@ -973,7 +1073,7 @@ const meaningful = (w) => w.length >= 3 && !GENERIC_WORDS.has(w);
 export const isCatchAll = (cat) => !!cat && /\b(otros?|otras?|varios|varias|general|miscelaneos?|sin categoria)\b/.test(normKey(cat.name));
 
 // Lo que se repite en una categoría "Otros" en el último año (al menos 3 veces, en 2 meses distintos o más):
-// se agrupa por el comienzo de la descripción ("Starlink", "Starlink oct" → "Starlink") y se propone su
+// se agrupa por el comienzo de la descripción ("Netflix", "Netflix oct" → "Netflix") y se propone su
 // propia categoría, o mover a una que ya existe con ese nombre. `catId` limita a una categoría.
 export function categorySuggestions({ catId = null, minCount = 3, minMonths = 2 } = {}) {
   const since = addDays(todayStr(), -365);
@@ -997,7 +1097,7 @@ export function categorySuggestions({ catId = null, minCount = 3, minMonths = 2 
   const out = [];
   for (const m of per.values()) {
     const chosen = [];
-    // del comienzo más corto al más largo: "Starlink" gana sobre "Starlink oct"
+    // del comienzo más corto al más largo: "Netflix" gana sobre "Netflix oct"
     for (const g of [...m.values()].sort((a, b) => a.words.length - b.words.length || b.count - a.count)) {
       if (g.count < minCount || g.months.size < minMonths || !g.words.some(meaningful) || !meaningful(g.words[0]) && g.words.length === 1) continue;
       if (chosen.some(c => startsWithWords(g.words, c.words)) || ignore.has(`${g.cat.id}|${g.key}`)) continue;
@@ -1110,7 +1210,7 @@ export function suggestCategories(q, kinds, limit = 2) {
 // ---- Asistentes: ordenar categorías -----------------------------------------
 
 // Nombre "base" para encontrar gemelas heredadas del Excel: "Comida (compartida)" ≈ "Comida",
-// "Otros Gastos" ≈ "Otros (compartidos)", "Maite Solo" ≈ "Maite".
+// "Otros Gastos" ≈ "Otros (compartidos)", "Luz solo" ≈ "Luz".
 const QUALIFIERS = new Set(['compartido', 'compartida', 'compartidos', 'compartidas', 'solo', 'sola', 'gasto', 'gastos']);
 function baseName(name) {
   return stripAccents(String(name).replace(/\([^)]*\)/g, ' ').toLowerCase())
