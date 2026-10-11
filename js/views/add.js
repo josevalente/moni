@@ -213,12 +213,24 @@ export function openTxForm(existing, defaults = {}) {
         const items = await navigator.clipboard.read();
         for (const it of items) { const type = it.types.find(t => t.startsWith('image/')); if (type) return readReceiptImage(await it.getType(type)); }
         for (const it of items) if (it.types.includes('text/plain')) return applyText(await (await it.getType('text/plain')).text());
+        if (!items.length) return toast(NOTHING, { ms: 7000 });
       } catch { /* algunos navegadores solo permiten leer texto */ }
     }
     let text = '';
-    try { text = await navigator.clipboard.readText(); } catch { toast('No se pudo leer el portapapeles'); return; }
+    try { text = await navigator.clipboard.readText(); } catch { toast('No se pudo leer lo copiado. Si el iPhone muestra "Pegar", tócalo para permitirlo.', { ms: 7000 }); return; }
+    if (!String(text).trim()) return toast(NOTHING, { ms: 7000 });
     applyText(text);
   }
+  const NOTHING = 'No hay nada copiado. Copia la captura del comprobante (en la captura o en Fotos: Compartir › Copiar) y vuelve a tocar 📋 Pegar.';
+  // pegar con el gesto del teléfono (mantener presionado un campo › Pegar): una imagen se lee como comprobante,
+  // y un texto de varias líneas con un monto, también
+  root.addEventListener('paste', (e) => {
+    if (isEdit || s.kind === 'settle' || !e.clipboardData) return;
+    const file = [...(e.clipboardData.files || [])].find(f => f.type.startsWith('image/'));
+    if (file) { e.preventDefault(); readReceiptImage(file); return; }
+    const text = e.clipboardData.getData('text/plain') || '';
+    if (/\n/.test(text.trim()) && M.parseReceipt(text)) { e.preventDefault(); applyText(text); }
+  });
   function applyText(text) {
     const multi = /\n/.test(String(text).trim());
     const r = multi || !/^moni\|/i.test(String(text).trim()) ? M.parseReceipt(text) : null;
@@ -451,7 +463,7 @@ export function openTxForm(existing, defaults = {}) {
     // pegar lo copiado (compra del atajo de Apple Pay, comprobante o su captura) o elegir la foto de un comprobante
     const canFill = !isEdit && s.kind !== 'settle';
     parts.push(h('div', { class: 'form-top' }, kindSel,
-      canFill && navigator.clipboard && navigator.clipboard.readText ? h('button', { type: 'button', class: 'chip small paste-btn', onclick: pasteAny }, '📋 Pegar') : null,
+      canFill && navigator.clipboard && navigator.clipboard.readText ? h('button', { type: 'button', class: 'chip small paste-btn', onclick: pasteAny, title: 'Pega una captura de un comprobante, su texto o una compra de Apple Pay' }, '📋 Pegar') : null,
       canFill ? h('button', { type: 'button', class: 'chip small', onclick: () => fileIn.click() }, '📷 Comprobante') : null,
       fileIn));
     if (isFlow) parts.push(h('div', { class: 'desc-wrap' }, descIn, suggestBox));
