@@ -478,3 +478,5 @@ select:disabled { opacity: .65; }
 .sug-row .row-actions { margin-left: auto; }
 /* calendario de registros mirando un mes pasado: los días de otros meses, atenuados */
 .cal-cell.other { opacity: .35; }
+.alloc-note { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--warn); color: var(--warn-ink); font-size: 13px; }
+.alloc-note span { flex: 1; }

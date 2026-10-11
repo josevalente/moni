@@ -98,7 +98,7 @@ export function openTxForm(existing, defaults = {}) {
   const { focus: focusTarget, lastAmount: lastAmountDefault, lockAccount = false, ...rest } = defaults;
   const s = {
     kind: 'out', date: today, amount: '', currency: null, accountId: null, toAccountId: null,
-    categoryId: null, desc: '', paidBy: me, alloc: null, allocTouched: false, fx: null, fxTouched: false,
+    categoryId: null, desc: '', paidBy: me, alloc: null, allocTouched: false, allocManual: false, fx: null, fxTouched: false,
     tag: '', to: null, settleMonth: null, toAmount: '', accTouched: false, open: null, lastAmount: lastAmountDefault || null,
     ...rest,
   };
@@ -110,10 +110,12 @@ export function openTxForm(existing, defaults = {}) {
     });
     s.alloc = allocToState(existing.alloc);
     s.allocTouched = true;
+    s.allocManual = s.alloc !== allocToState((M.category(existing.categoryId) || {}).defaultAlloc);
     s.accTouched = true;
   } else if (rest.alloc !== undefined) {
     s.alloc = allocToState(rest.alloc);   // duplicar o pendiente: conserva el reparto
     s.allocTouched = true;
+    s.allocManual = s.alloc !== allocToState((M.category(s.categoryId) || {}).defaultAlloc);
   }
   // lo que paga otra persona no sale de las cuentas del dueño
   const ownerInvolved = () => (s.kind === 'settle' ? (s.paidBy === owner || s.to === owner) : s.paidBy === owner);
@@ -169,6 +171,15 @@ export function openTxForm(existing, defaults = {}) {
     s.alloc = allocToState(cat && cat.defaultAlloc);
   };
   resolveAlloc();
+  // al elegir otra categoría se usa su reparto, salvo que el de este movimiento se haya cambiado a mano
+  // (antes, al editar o tras una sugerencia, quedaba el reparto anterior: un gasto compartido quedaba personal)
+  function pickCategory(id) {
+    s.categoryId = id;
+    resolvePayer();
+    if (!s.allocManual) s.allocTouched = false;
+    resolveAlloc();
+    render();
+  }
 
   const seg = (opts, value, onPick, label) => h('div', { class: 'seg', role: 'group', 'aria-label': label || null }, opts.map(o => h('button', {
     type: 'button', class: o.v === value ? 'on' : '', 'aria-pressed': String(o.v === value), onclick: () => onPick(o.v),
@@ -459,8 +470,8 @@ export function openTxForm(existing, defaults = {}) {
       if (cat) { const i = chipCats.findIndex(c => c.id === cat.id); if (i >= 0) chipCats.splice(i, 1); chipCats.unshift(cat); }
       parts.push(h('div', { class: 'field' }, h('span', null, 'Categoría'),
         h('div', { class: 'chips scroll cat-chips' },
-          chipCats.map(c => h('button', { type: 'button', class: 'chip' + (c.id === s.categoryId ? ' on' : ''), 'aria-pressed': String(c.id === s.categoryId), onclick: () => { s.categoryId = c.id; resolvePayer(); resolveAlloc(); render(); } }, (c.icon ? c.icon + ' ' : '') + c.name)),
-          h('button', { type: 'button', class: 'chip more', onclick: () => categoryPicker(s.kind, s.categoryId, (id) => { s.categoryId = id; resolvePayer(); resolveAlloc(); render(); }) }, 'Todas…'))));
+          chipCats.map(c => h('button', { type: 'button', class: 'chip' + (c.id === s.categoryId ? ' on' : ''), 'aria-pressed': String(c.id === s.categoryId), onclick: () => pickCategory(c.id) }, (c.icon ? c.icon + ' ' : '') + c.name)),
+          h('button', { type: 'button', class: 'chip more', onclick: () => categoryPicker(s.kind, s.categoryId, pickCategory) }, 'Todas…'))));
 
       // cuenta: las 2 más usadas, la actual, "Otra…" (con "Sin cuenta") y, si hay más personas, "Pagó <persona>":
       // quien paga sin una de tus cuentas. Elegir una de tus cuentas vuelve a dejarte como pagador.
@@ -495,6 +506,12 @@ export function openTxForm(existing, defaults = {}) {
         many ? sum('payer', '👤', `${s.kind === 'in' ? 'Recibió' : 'Pagó'} ${M.personName(s.paidBy)}`) : null,
         many ? sum('alloc', '👥', allocLabel()) : null,
         sum('tag', '#', s.tag ? '#' + s.tag : 'Etiqueta')));
+      // un gasto personal en una categoría que se comparte: suele ser un descuido (no entra en el cierre)
+      if (many && cat && s.kind === 'out' && allocToState(cat.defaultAlloc) === 'shared' && s.alloc !== 'shared') {
+        parts.push(h('div', { class: 'alloc-note' },
+          h('span', null, `"${cat.name}" se reparte compartido, pero este gasto está como ${allocLabel().toLowerCase()} y no entra en el cierre.`),
+          h('button', { type: 'button', class: 'btn small', onclick: () => { s.alloc = 'shared'; s.allocTouched = true; s.allocManual = false; render(); } }, 'Compartirlo')));
+      }
       if (s.open === 'date') {
         parts.push(h('div', { class: 'sum-editor' },
           h('div', { class: 'chips' },
@@ -507,7 +524,7 @@ export function openTxForm(existing, defaults = {}) {
         const shown = s.alloc === 'payer' ? s.paidBy : s.alloc;
         const catMode = cat && cat.splitMode === 'fixed' ? 'regla fija de la categoría' : cat && cat.splitMode === 'equal' ? 'partes iguales' : 'según sueldos';
         parts.push(h('div', { class: 'sum-editor' },
-          seg([{ v: 'shared', l: 'Compartido' }, ...people.map(p => ({ v: p.id, l: `Solo de ${p.name}` }))], shown, (v) => { s.alloc = v; s.allocTouched = true; render(); }, 'Reparto'),
+          seg([{ v: 'shared', l: 'Compartido' }, ...people.map(p => ({ v: p.id, l: `Solo de ${p.name}` }))], shown, (v) => { s.alloc = v; s.allocTouched = true; s.allocManual = true; render(); }, 'Reparto'),
           s.alloc === 'shared' ? h('small', { class: 'muted' }, `${splitLabel().replace('Compartido ', '')} (${catMode})`) : null));
       } else if (s.open === 'tag') {
         parts.push(h('div', { class: 'sum-editor' }, tagIn));
