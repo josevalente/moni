@@ -480,3 +480,8 @@ select:disabled { opacity: .65; }
 .cal-cell.other { opacity: .35; }
 .alloc-note { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--warn); color: var(--warn-ink); font-size: 13px; }
 .alloc-note span { flex: 1; }
+/* recuadro para pegar un comprobante con el gesto del teléfono */
+.paste-zone { min-height: 140px; border: 2px dashed var(--line); border-radius: 14px; padding: 14px; margin: 8px 0; display: grid; place-items: center; text-align: center; color: var(--muted); -webkit-user-select: text; user-select: text; overflow: hidden; }
+.paste-zone:empty::before { content: 'Mantén presionado aquí › Pegar'; font-weight: 600; }
+.paste-zone:focus { outline: 2px solid var(--brand); outline-offset: 2px; }
+.paste-zone img { max-width: 100%; max-height: 200px; }

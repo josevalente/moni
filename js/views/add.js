@@ -208,22 +208,51 @@ export function openTxForm(existing, defaults = {}) {
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
   // ---- pegar: una compra del atajo de Apple Pay, el texto de un comprobante o la captura de uno
   async function pasteAny() {
-    if (navigator.clipboard.read) {
+    // camino rápido: leer lo copiado (en el iPhone aparece el globo "Pegar" para permitirlo)
+    if (navigator.clipboard && navigator.clipboard.read) {
       try {
         const items = await navigator.clipboard.read();
-        for (const it of items) { const type = it.types.find(t => t.startsWith('image/')); if (type) return readReceiptImage(await it.getType(type)); }
-        for (const it of items) if (it.types.includes('text/plain')) return applyText(await (await it.getType('text/plain')).text());
-        if (!items.length) return toast(NOTHING, { ms: 7000 });
+        for (const it of items) {
+          const type = it.types.find(t => /image|png|jpe?g|heic|heif|tiff|gif|webp/i.test(t));
+          if (type) return readReceiptImage(await it.getType(type));
+        }
+        for (const it of items) if (it.types.includes('text/plain')) { const t = await (await it.getType('text/plain')).text(); if (t.trim()) return applyText(t); }
       } catch { /* algunos navegadores solo permiten leer texto */ }
     }
     let text = '';
-    try { text = await navigator.clipboard.readText(); } catch { toast('No se pudo leer lo copiado. Si el iPhone muestra "Pegar", tócalo para permitirlo.', { ms: 7000 }); return; }
-    if (!String(text).trim()) return toast(NOTHING, { ms: 7000 });
-    applyText(text);
+    try { text = await navigator.clipboard.readText(); } catch { /* sin permiso o sin texto */ }
+    if (String(text).trim()) return applyText(text);
+    // el iPhone no siempre entrega una foto copiada a un botón: se pega a mano en un recuadro
+    openPasteZone();
   }
-  const NOTHING = 'No hay nada copiado. Copia la captura del comprobante (en la captura o en Fotos: Compartir › Copiar) y vuelve a tocar 📋 Pegar.';
-  // pegar con el gesto del teléfono (mantener presionado un campo › Pegar): una imagen se lee como comprobante,
-  // y un texto de varias líneas con un monto, también
+  // Recuadro para pegar con el gesto del teléfono (mantener presionado › Pegar), que sí entrega la imagen.
+  function openPasteZone() {
+    const zone = h('div', { class: 'paste-zone', contenteditable: 'true', role: 'textbox', 'aria-label': 'Pega aquí el comprobante', inputmode: 'none' });
+    const done = (blob) => { mz.close(); readReceiptImage(blob); };
+    const fromText = (t) => { if (String(t).trim()) { mz.close(); applyText(t); return true; } return false; };
+    zone.addEventListener('paste', (e) => {
+      const dt = e.clipboardData;
+      if (!dt) return;
+      const file = [...(dt.files || [])].find(f => f.type.startsWith('image/'))
+        || [...(dt.items || [])].filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile()).find(Boolean);
+      if (file) { e.preventDefault(); done(file); return; }
+      if (fromText(dt.getData('text/plain') || '')) e.preventDefault();
+    });
+    // si el teléfono inserta la imagen en el recuadro en vez de entregarla en el evento
+    zone.addEventListener('input', async () => {
+      const img = zone.querySelector('img');
+      if (!img) return;
+      try { done(await (await fetch(img.src)).blob()); } catch { zone.textContent = ''; toast('No se pudo leer esa imagen'); }
+    });
+    const mz = modal('Pegar comprobante', h('div', null,
+      h('p', { class: 'small' }, 'Mantén presionado el recuadro y toca «Pegar». Se lee en tu teléfono; la imagen no sale de él.'),
+      zone,
+      h('p', { class: 'muted small' }, 'Para copiar: en la captura o en Fotos, Compartir › Copiar. O elige la foto directamente:'),
+      h('button', { type: 'button', class: 'btn', onclick: () => { mz.close(); fileIn.click(); } }, '📷 Elegir de Fotos')));
+    setTimeout(() => zone.focus(), 50);
+  }
+  // pegar con el gesto del teléfono sobre un campo del formulario (mantener presionado › Pegar): una imagen se
+  // lee como comprobante, y un texto de varias líneas con un monto, también
   root.addEventListener('paste', (e) => {
     if (isEdit || s.kind === 'settle' || !e.clipboardData) return;
     const file = [...(e.clipboardData.files || [])].find(f => f.type.startsWith('image/'));
