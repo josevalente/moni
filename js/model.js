@@ -927,7 +927,7 @@ export function savingsOfMonth(ym, mode = 'total') {
 // - gasto propio: el promedio de los últimos 12 meses (incluye contribuciones e impuestos anuales), sin los
 //   dividendos, que van exactos según la tabla de cada crédito (en UF, con la UF al ritmo del último año);
 // - si se indica, un arriendo. Parte con la liquidez de hoy (cuentas menos tarjetas).
-export function cashForecast({ months = 12, rent = null } = {}) {
+export function cashForecast({ months = 12, rent = null, spend: spendOverride = null } = {}) {
   const cur = curYm();
   const owner = ownerId();
   const closed = monthsBetween(addMonths(cur, -12), addMonths(cur, -1));
@@ -942,7 +942,8 @@ export function cashForecast({ months = 12, rent = null } = {}) {
   const incomeBase = median(incSeries);
   const lumps = new Map();
   closed.forEach((ym, i) => { const extra = incSeries[i] - incomeBase; if (extra > Math.max(incomeBase, 1)) lumps.set(ym.slice(5), extra); });
-  const spendBase = closed.reduce((a, ym, i) => a + ownSpend(i), 0) / closed.length;
+  const spendAvg = closed.reduce((a, ym, i) => a + ownSpend(i), 0) / closed.length;
+  const spendBase = Number.isFinite(spendOverride) && spendOverride >= 0 ? spendOverride : spendAvg;
   const deductions = median(dedSeries);
   const today = todayStr();
   const uf0 = rateFor('UF', today) || 1, uf12 = rateFor('UF', addDays(today, -365)) || uf0;
@@ -950,7 +951,19 @@ export function cashForecast({ months = 12, rent = null } = {}) {
   const bal0 = accountBalances();
   let liquid = 0;
   for (const a of accounts()) if (currencyInfo(a.currency).convertible !== false) liquid += (bal0.get(a.id) || 0) * (rateFor(a.currency, today) ?? 1);
+  // cada dividendo según quién lo paga: el reparto de su último movimiento o, si no hay, el de su categoría
+  // (ej. un dividendo compartido con la pareja solo sale en tu parte)
+  const ps = people(), pct = splitFor(cur).pct;
+  const shareOf = (d) => {
+    const c = db.all('categories').find(x => x.debtId === d.id && !x.archived);
+    if (!c) return 1;
+    const last = db.all('tx').filter(t => t.kind === 'out' && t.categoryId === c.id).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+    const tx = last || { alloc: c.defaultAlloc === 'shared' ? 'shared' : c.defaultAlloc || 'none', paidBy: owner };
+    const sh = shares(tx, c, pct, ps);
+    return sh ? (sh[owner] || 0) : (tx.paidBy === owner ? 1 : 0);
+  };
   const mortgages = db.all('debts').filter(d => d.mortgage && !d.archived);
+  const shareMap = new Map(mortgages.map(d => [d.id, shareOf(d)]));     // sin tocar los registros guardados
   const rows = [];
   let balance = liquid;
   // lo que queda del mes en curso: el ingreso típico que aún no llega (ej. el sueldo de fin de mes), el gasto
@@ -968,7 +981,7 @@ export function cashForecast({ months = 12, rent = null } = {}) {
       const n0 = cuotasPaid(d, today), n1 = cuotasPaid(d, monthEnd(cur));
       let amt = 0;
       for (let n = n0 + 1; n <= n1; n++) amt += d.mortgage.rows[n - 1][6];
-      if (amt) dividends.push({ name: d.name, amount: amt * (d.currency === 'UF' ? uf0 : (rateFor(d.currency, today) ?? 1)) });
+      if (amt) dividends.push({ name: d.name, amount: amt * shareMap.get(d.id) * (d.currency === 'UF' ? uf0 : (rateFor(d.currency, today) ?? 1)), share: shareMap.get(d.id) });
     }
     const div = dividends.reduce((a, x) => a + x.amount, 0);
     const net = income - spend - div;
@@ -984,7 +997,7 @@ export function cashForecast({ months = 12, rent = null } = {}) {
       let amt = 0;
       for (let n = n0 + 1; n <= n1; n++) amt += d.mortgage.rows[n - 1][6];
       const rate = d.currency === 'UF' ? uf : (rateFor(d.currency, today) ?? 1);
-      if (amt) dividends.push({ name: d.name, amount: amt * rate });
+      if (amt) dividends.push({ name: d.name, amount: amt * rate * shareMap.get(d.id), share: shareMap.get(d.id) });
     }
     const div = dividends.reduce((a, x) => a + x.amount, 0);
     const rentNet = rent && rent.uf && ym >= rent.from ? rent.uf * uf * (1 - (rent.adminPct || 0) / 100) : 0;
@@ -995,7 +1008,7 @@ export function cashForecast({ months = 12, rent = null } = {}) {
     rows.push({ ym, income, lump: lumps.get(ym.slice(5)) || 0, spend, dividends, div, rent: rentNet, net, balance });
   }
   const yearIncome = incSeries.reduce((a, v) => a + v, 0);
-  return { incomeBase, yearIncome, deductions, lumps: [...lumps.entries()], spendBase, liquid, inflation: Math.pow(g, 12) - 1, rows };
+  return { incomeBase, yearIncome, deductions, lumps: [...lumps.entries()], spendBase, spendAvg, liquid, inflation: Math.pow(g, 12) - 1, rows };
 }
 
 // Indicadores de salud financiera con su referencia (tasa de ahorro, fondo de emergencia, carga de los

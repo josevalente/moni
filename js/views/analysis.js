@@ -56,7 +56,7 @@ function rentHint(m, c) {
 
 // ---- Proyección de caja ----------------------------------------------------------------------
 // comisión típica de las administradoras de arriendo: un mes de arriendo al año (8,33%)
-const fcView = { rent: false, uf: null, adminPct: 8.33, from: null, propId: null };
+const fcView = { rent: false, uf: null, adminPct: 8.33, from: null, propId: null, spend: null };
 export function forecastCard(onScenario) {
   const base = M.base();
   const c = (v) => compactMoney(v, base);
@@ -82,8 +82,8 @@ export function forecastCard(onScenario) {
   const tableBox = h('div');
   const draw = () => {
     const rent = fcView.rent && fcView.uf ? { uf: fcView.uf, adminPct: fcView.adminPct, from: fcView.from } : null;
-    const f = M.cashForecast({ months: 12, rent });
-    const f0 = rent ? M.cashForecast({ months: 12 }) : null;      // sin arriendo, para comparar
+    const f = M.cashForecast({ months: 12, rent, spend: fcView.spend });
+    const f0 = rent ? M.cashForecast({ months: 12, spend: fcView.spend }) : null;      // sin arriendo, para comparar
     // hoy, el cierre de este mes (lo que queda de él) y cada mes siguiente
     const pts = [{ short: 'hoy', long: 'Hoy', ym: M.curYm() }, ...f.rows.map(r => ({ short: M.monthShort(r.ym).toLowerCase(), long: r.partial ? `Fin de ${monthLow(r.ym)}` : M.monthName(r.ym), ym: r.ym }))];
     const low = f.rows.reduce((a, r) => (r.balance < a.balance ? r : a), f.rows[0]);
@@ -105,11 +105,33 @@ export function forecastCard(onScenario) {
         },
         ariaLabel: `Caja proyectada: ${msg}`,
       }));
+    // un mes típico (sin el ingreso anual): de dónde sale el resultado de cada mes
+    const typ = [...f.rows].reverse().find(r => !r.partial && !r.lump) || f.rows.at(-1);
+    const line = (label, v, strong) => h('div', { class: 'rent-line' + (strong ? ' strong' : '') }, h('span', null, label), h('span', { class: v < 0 ? 'neg' : '' }, M.fmt(v, base, { sign: true })));
+    live.append(h('div', { class: 'fc-typical' },
+      h('h4', null, `Un mes típico (${monthLow(typ.ym)})`),
+      h('div', { class: 'rent' },
+        line('Ingreso líquido', typ.income),
+        typ.rent ? line('Arriendo neto', typ.rent) : null,
+        line(fcView.spend != null ? 'Tu gasto (ajustado)' : 'Tu gasto (tu parte, promedio de 12 meses)', -typ.spend),
+        typ.dividends.map(d => line(`${d.name}${d.share < 1 ? ` (tu parte, ${pct(d.share)})` : ''}`, -d.amount)),
+        line('Resultado del mes', typ.net, true))));
     fill(tableBox, dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [r.partial ? `Resto de ${monthLow(r.ym)}` : M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])));
     return f;
   };
   const changed = () => { draw(); if (onScenario) onScenario(); };
 
+  // ajustar tu gasto mensual (p. ej. sin compras puntuales o con lo que deja de pagar al arrendar)
+  const spendIn = h('input', { type: 'text', inputmode: 'numeric', 'aria-label': 'Tu gasto al mes', placeholder: '' });
+  const spendHint = h('small', { class: 'muted' });
+  const showSpend = (f) => { spendIn.placeholder = M.fmt(f.spendAvg, base); spendHint.textContent = `Promedio de tus últimos 12 meses: ${M.fmt(f.spendAvg, base)}. Déjalo vacío para usarlo.`; };
+  spendIn.addEventListener('input', () => {
+    const v = M.parseAmount(spendIn.value);
+    fcView.spend = spendIn.value.trim() && Number.isFinite(v) ? v : null;
+    changed();
+  });
+  if (fcView.spend != null) spendIn.value = M.fmtInt(fcView.spend);
+  const spendBox = h('label', { class: 'fc-field fc-spend' }, h('span', null, 'Tu gasto al mes (para simular)'), spendIn, spendHint);
   // controles del escenario (se crean una sola vez)
   let scen = null;
   if (props.length) {
@@ -140,10 +162,11 @@ export function forecastCard(onScenario) {
   }
 
   const f = draw();
+  showSpend(f);
   return vizCard({
     title: 'Caja de los próximos 12 meses',
     subtitle: 'Tus cuentas: ingresos y gastos típicos, dividendos exactos de cada crédito',
-    chart: h('div', null, live, scen),
+    chart: h('div', null, live, scen, spendBox),
     table: tableBox,
     footnote: `Parte con tu liquidez de hoy (${c(f.liquid)}: cuentas menos tarjetas). Ingresos: ${c(f.incomeBase)} líquidos al mes${f.deductions ? ` (ya sin ${c(f.deductions)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${c(v)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${c(f.spendBase)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Gastos compartidos: cuenta tu parte (lo que pagas tú menos lo que le toca a la otra persona, más tu parte de lo que paga ella), que es lo que sale de tu cuenta con el cierre mensual. Este mes cuenta solo lo que falta. Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
   });

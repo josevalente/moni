@@ -485,3 +485,7 @@ select:disabled { opacity: .65; }
 .paste-zone:empty::before { content: 'Mantén presionado aquí › Pegar'; font-weight: 600; }
 .paste-zone:focus { outline: 2px solid var(--brand); outline-offset: 2px; }
 .paste-zone img { max-width: 100%; max-height: 200px; }
+.fc-typical { margin-top: 12px; }
+.fc-typical h4 { margin: 0 0 6px; }
+.fc-spend { margin-top: 10px; }
+.fc-spend small { margin-top: 2px; }
