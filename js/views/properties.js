@@ -5,6 +5,7 @@ import * as db from '../db.js';
 import * as M from '../model.js';
 import { fill, h, modal, toast, formModal, promptDialog, parseNum } from '../ui.js';
 import { lineChart, vizCard, dataTable } from '../charts.js';
+import { openPrepay, rentVsSellSection } from './decisions.js';
 
 const dShort = (d) => new Date(d + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' });
 const ufTxt = (v, cur = 'UF') => M.fmt(v, cur);
@@ -111,6 +112,7 @@ function contribPerMonth(p) {
 function openProperty(id) {
   const body = h('div');
   let m;
+  let rvs = null;            // la simulación se crea una vez (sus campos no se recrean al cambiar los datos)
   const draw = () => {
     const p = db.get('investments', id);
     if (!p) { if (m) m.close(); return; }
@@ -156,8 +158,10 @@ function openProperty(id) {
         h('p', { class: 'small' }, k < d.mortgage.rows.length
           ? `Cuota ${k + 1} de ${d.mortgage.rows.length}: ${ufTxt(toCur(next[6]), cur)}. De eso, ${ufTxt(toCur(next[1]), cur)} es amortización (ahorro: baja la deuda) y ${ufTxt(toCur(next[2] + next[4] + next[5]), cur)} interés y seguros (gasto).`
           : 'Crédito pagado.'),
-        h('p', { class: 'muted small' }, `Interés pagado hasta hoy: ${ufTxt(toCur(paidInterest), cur)}. En los reportes, del dividendo solo cuentan como gasto el interés y los seguros.`)) : null,
+        h('p', { class: 'muted small' }, `Interés pagado hasta hoy: ${ufTxt(toCur(paidInterest), cur)}. En los reportes, del dividendo solo cuentan como gasto el interés y los seguros.`),
+        k < d.mortgage.rows.length ? h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => openPrepay(d.id) }, 'Simular prepago')) : null) : null,
       h('section', { class: 'card' }, h('h3', null, 'Si la arriendas'), rentBlock(p, s)),
+      rvs || (rvs = rentVsSellSection(p)),
       h('h4', null, 'Costos y tasaciones'),
       entries.map(e => h('div', { class: 'row static' },
         h('div', { class: 'main' }, h('div', { class: 'title' }, e.kind === 'gain' ? 'Tasación' : e.fromTx ? (M.category(e.fromCat) || {}).name || 'Movimiento' : 'Costo'),

@@ -1103,6 +1103,223 @@ export function typicalPayer(catId, kind = 'out') {
   return c / total >= 0.8 && db.get('people', pid) ? pid : null;
 }
 
+// ---- Decisiones: prepagar un crédito, arrendar o vender, metas, proyección de patrimonio ---------------
+
+// Prepagar `prepay` (en la moneda del crédito, ej. UF) de un hipotecario en `at`: el banco permite bajar el
+// dividendo (mismo plazo) o acortar el plazo (mismo dividendo). Sistema francés con la tasa de su tabla.
+export function prepaySimulation(d, prepay, { at = todayStr() } = {}) {
+  if (!d || !d.mortgage) return null;
+  const rows = d.mortgage.rows;
+  const k = cuotasPaid(d, at);
+  const m = rows.length - k;
+  const B = k ? rows[k - 1][7] : d.mortgage.principal;
+  if (m <= 0 || B <= 0) return null;
+  const next = rows[k];
+  const i = next[2] / B;                                          // tasa mensual de la tabla
+  const A = next[1] + next[2];                                    // amortización + interés (sin seguros)
+  const fire = next[4] || 0, life = next[5] || 0;                 // seguros: incendio fijo, desgravamen según saldo
+  const P = Math.min(Math.max(0, prepay), B);
+  const B2 = B - P;
+  const intLeft = rows.slice(k).reduce((a, r) => a + r[2], 0);
+  const insLeft = rows.slice(k).reduce((a, r) => a + (r[4] || 0) + (r[5] || 0), 0);
+  const annuity = (bal, n) => (i > 0 ? bal * i / (1 - Math.pow(1 + i, -n)) : bal / n);
+  // bajar el dividendo
+  const A1 = B2 > 0 ? annuity(B2, m) : 0;
+  const lifeK = B > 0 ? B2 / B : 0;
+  const cuota = { dividend: A1 + fire + life * lifeK, before: A + fire + life, interestSaved: intLeft - (A1 * m - B2), months: m };
+  cuota.monthlySaving = cuota.before - cuota.dividend;
+  // acortar el plazo
+  let m2 = 0;
+  if (B2 > 0) m2 = i > 0 ? Math.ceil(-Math.log(1 - B2 * i / A) / Math.log(1 + i)) : Math.ceil(B2 / A);
+  const plazo = { months: m2, monthsSaved: m - m2, interestSaved: intLeft - Math.max(0, A * m2 - B2), insuranceSaved: insLeft * (m - m2) / m, end: addMonths(ymOf(at), m2) };
+  return { balance: B, remaining: m, annualRate: Math.pow(1 + i, 12) - 1, prepay: P, cuota, plazo, endNow: addMonths(ymOf(at), m) };
+}
+
+// ¿Arrendar o vender una propiedad? Todo en UF (pesos de hoy). Vender hoy: se recibe valor − costo de venta −
+// crédito − la parte del socio en la plusvalía, y se invierte a `altReturn`. Mantener y arrendar: cada mes entra
+// el arriendo (menos comisión y meses vacíos) y salen el dividendo y los costos del dueño; ese flujo se invierte
+// (o se financia) a la misma tasa; al final la propiedad vale más (`appreciation`) y debe menos.
+function rentVsSellCore(p, { years = 10, rentUF = 0, adminPct = 8.33, vacancyMonths = 0.5, appreciation = 0.02, altReturn = 0.03, sellCostPct = 2, ownerCostsUF = 0 } = {}) {
+  const today = todayStr();
+  const ufNow = rateFor('UF', today) || 1;
+  const toUF = (v, cur) => (cur === 'UF' ? v : v * (rateFor(cur, today) ?? 1) / ufNow);
+  const s = propertyStats(p, today);
+  const V0 = toUF(s.value, p.currency), basis = toUF(s.basis, p.currency), share = s.share || 0;
+  const d = s.mortgage;
+  const k = d ? cuotasPaid(d, today) : 0;
+  const balAfter = (n) => (!d ? 0 : n <= 0 ? (k ? d.mortgage.rows[k - 1][7] : d.mortgage.principal) : (d.mortgage.rows[Math.min(k + n, d.mortgage.rows.length) - 1] || [0, 0, 0, 0, 0, 0, 0, 0])[7]);
+  const debtUF = (bal) => (d && d.currency !== 'UF' ? toUF(bal, d.currency) : bal);
+  const claim = (V) => share * Math.max(0, V - basis);
+  const net = (V, bal) => V * (1 - sellCostPct / 100) - debtUF(bal) - claim(V);
+  const rm = Math.pow(1 + altReturn, 1 / 12) - 1, gm = Math.pow(1 + appreciation, 1 / 12) - 1;
+  const rentNet = rentUF * (12 - vacancyMonths) / 12 * (1 - adminPct / 100);
+  const sell0 = net(V0, balAfter(0));
+  const series = [{ year: 0, keep: sell0, sell: sell0, cash: 0 }];
+  let acc = 0, firstFlow = null;
+  for (let t = 1; t <= years * 12; t++) {
+    const row = d ? d.mortgage.rows[k + t - 1] : null;
+    const div = row ? debtUF(row[6]) : 0;
+    const flow = rentNet - div - ownerCostsUF;
+    if (firstFlow == null) firstFlow = flow;
+    acc = acc * (1 + rm) + flow;
+    if (t % 12 === 0) {
+      const V = V0 * Math.pow(1 + gm, t);
+      series.push({ year: t / 12, keep: net(V, balAfter(t)) + acc, sell: sell0 * Math.pow(1 + rm, t), cash: acc });
+    }
+  }
+  return { value: V0, debt: debtUF(balAfter(0)), partnerClaim: claim(V0), sellNow: sell0, rentNet, monthlyFlow: firstFlow ?? 0, series, end: series.at(-1), ufNow };
+}
+export function rentVsSell(p, opts = {}) {
+  const r = rentVsSellCore(p, opts);
+  // plusvalía anual con la que ambas opciones empatan (búsqueda binaria)
+  const f = (g) => rentVsSellCore(p, { ...opts, appreciation: g }).end.keep - r.end.sell;
+  let lo = -0.1, hi = 0.15, breakEven = null;
+  if (f(lo) < 0 && f(hi) > 0) { for (let n = 0; n < 40; n++) { const mid = (lo + hi) / 2; if (f(mid) > 0) hi = mid; else lo = mid; } breakEven = (lo + hi) / 2; }
+  return { ...r, breakEven };
+}
+
+// Resumen de un mes cerrado: gasto contra un mes típico, ahorro, lo que más cambió, gastos fuera de lo normal,
+// el cierre entre las personas y cómo se registró.
+export function monthSummary(ym) {
+  const me = meId();
+  const prev = monthsBetween(addMonths(ym, -6), addMonths(ym, -1));
+  const medianOf = (vals) => median(vals.filter(v => v > 0));
+  const hogar = categoryMatrix([...prev, ym], { mode: 'total' });
+  const mine = categoryMatrix([...prev, ym], { mode: 'mine' });
+  const i = prev.length;
+  const spend = { total: hogar.totals[i], typical: medianOf(hogar.totals.slice(0, i)), mine: mine.totals[i], mineTypical: medianOf(mine.totals.slice(0, i)) };
+  const changes = hogar.rows.map(r => ({ catId: r.catId, label: r.label, icon: r.icon, now: r.values[i], typical: median(r.values.slice(0, i)) }))
+    .map(r => ({ ...r, diff: r.now - r.typical })).filter(r => Math.abs(r.diff) >= 1).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)).slice(0, 5);
+  const sv = savingsOfMonth(ym, 'mine');
+  const led = people().length > 1 ? ledger(ym) : null;
+  const days = Number(monthEnd(ym).slice(8));
+  const counts = entryCounts(`${ym}-01`, monthEnd(ym));
+  let empty = 0, n = 0;
+  for (let dd = 1; dd <= days; dd++) { const c = counts.get(`${ym}-${String(dd).padStart(2, '0')}`) || 0; n += c; if (!c) empty++; }
+  // el cierre: lo que ya se pagó por ese mes y lo que queda pendiente
+  const paid = db.all('tx').filter(t => t.kind === 'settle' && settleMonthOf(t) === ym).map(t => ({ from: t.paidBy, to: t.to, amount: txBase(t), date: t.date }));
+  return { ym, spend, changes, savings: sv, unusual: unusualSpending(ym, 'total').slice(0, 3), settle: led ? settleSummary(led.balance) : [], paid, entries: n, emptyDays: empty, me };
+}
+
+// Gastos que no son mensuales (contribuciones, seguros anuales, permisos…): categorías del último año con
+// meses en cero y un total relevante. Lo que conviene apartar cada mes para no llevarse la sorpresa.
+export function nonMonthlyProvisions({ min = 300000 } = {}) {
+  const cur = curYm();
+  const months = monthsBetween(addMonths(cur, -12), addMonths(cur, -1));
+  const mx = categoryMatrix(months, { mode: 'mine' });
+  // el año anterior: un gasto anual (ej. el permiso de circulación) aparece una vez por año
+  const before = new Map(categoryMatrix(months.map(m => addMonths(m, -12)), { mode: 'mine' }).rows.map(r => [r.catId, r.total]));
+  return mx.rows.filter(r => {
+    const cat = category(r.catId);
+    if (!cat || cat.debtId || cat.invId || isPayrollDeduction(cat) || isCatchAll(cat)) return false;
+    const active = r.values.filter(v => v > 0).length;
+    // con gasto en 1 a 6 meses del año, y que se repite (2+ meses, o también el año anterior): no un gasto único
+    return active >= 1 && active <= 6 && (active >= 2 || (before.get(r.catId) || 0) > 0) && r.total >= min;
+  }).map(r => ({ catId: r.catId, label: r.label, icon: r.icon, total: r.total, monthly: r.total / 12, months: r.values.filter(v => v > 0).length }))
+    .sort((a, b) => b.total - a.total);
+}
+
+// Metas de ahorro (en la configuración, viajan en el respaldo). Avance según una cuenta, una inversión, la
+// liquidez (fondo de emergencia, en meses de salida) o un monto que se anota a mano.
+export const goals = () => settings().goals || [];
+export function goalProgress(g) {
+  const today = todayStr();
+  let current = 0, target = g.target || 0;
+  if (g.source === 'emergency') {
+    const fc = cashForecast({ months: 3 });
+    const div = median(fc.rows.filter(r => !r.partial).map(r => r.div));
+    const monthly = fc.spendBase + div;
+    target = (g.months || 3) * monthly;
+    current = Math.max(0, fc.liquid);
+  } else if (g.source === 'account' && g.ref) {
+    const a = account(g.ref);
+    current = a ? (accountBalances().get(a.id) || 0) * (rateFor(a.currency, today) ?? 1) : 0;
+  } else if (g.source === 'investment' && g.ref) {
+    const inv = investmentSummaries().find(x => x.id === g.ref);
+    current = inv ? inv.balance * (rateFor(inv.currency, today) ?? 1) : 0;
+  } else current = g.saved || 0;
+  const left = Math.max(0, target - current);
+  const monthsLeft = g.due ? Math.max(1, monthsBetween(curYm(), g.due).length - 1) : null;
+  return { current, target, left, pct: target ? Math.min(1, current / target) : 0, monthsLeft, monthly: monthsLeft ? left / monthsLeft : null, done: target > 0 && current >= target };
+}
+export async function saveGoal(g) {
+  const st = settings();
+  const list = (st.goals || []).filter(x => x.id !== g.id);
+  const item = { ...g, id: g.id || db.uid() };
+  return db.put('settings', { ...st, goals: [...list, item] });
+}
+export async function deleteGoal(id) {
+  const st = settings();
+  return db.put('settings', { ...st, goals: (st.goals || []).filter(x => x.id !== id) });
+}
+
+// Patrimonio a N años en pesos de hoy: propiedades que suben `appreciation` sobre la UF (menos la parte del
+// socio), créditos según su tabla, inversiones que rinden `invReturn` sobre la UF y la caja que se acumula con el
+// resultado de un año típico de la proyección (con el arriendo simulado, si lo hay).
+export function netWorthProjection({ years = 10, appreciation = 0.02, invReturn = 0.03, rent = null, spend = null } = {}) {
+  const today = todayStr();
+  const ufNow = rateFor('UF', today) || 1;
+  const fc = cashForecast({ months: 12, rent, spend });
+  const yearNet = fc.rows.filter(r => !r.partial).reduce((a, r) => a + r.net, 0) / (1 + fc.inflation);   // a pesos de hoy
+  const props = propertySummaries();
+  const invs = investmentSummaries().filter(i => currencyInfo(i.currency).convertible !== false);
+  const inv0 = invs.reduce((a, i) => a + i.balance * (rateFor(i.currency, today) ?? 1), 0);
+  const nw0 = netWorth();
+  const others = nw0.cards + (nw0.debts - db.all('debts').filter(d => d.mortgage && !d.archived).reduce((a, d) => a - debtBalanceAt(d, today) * (rateFor(d.currency, today) ?? 1), 0));
+  const rows = [];
+  for (let y = 0; y <= years; y++) {
+    const t = y * 12;
+    let propsV = 0, mort = 0;
+    for (const p of props) {
+      const s = propertyStats(p, today);
+      const r = rateFor(p.currency, today) ?? 1;
+      const V = s.value * r * Math.pow(1 + appreciation, y);
+      propsV += V - (s.share || 0) * Math.max(0, V - s.basis * r);
+    }
+    for (const d of db.all('debts').filter(x => x.mortgage && !x.archived)) {
+      const k = cuotasPaid(d, today);
+      const n = Math.min(k + t, d.mortgage.rows.length);
+      const bal = n ? d.mortgage.rows[n - 1][7] : d.mortgage.principal;
+      mort += bal * (d.currency === 'UF' ? ufNow : (rateFor(d.currency, today) ?? 1));
+    }
+    const inv = inv0 * Math.pow(1 + invReturn, y);
+    const cash = fc.liquid + yearNet * y;
+    rows.push({ year: y, props: propsV, mortgages: mort, inv, cash, net: propsV - mort + inv + cash + others });
+  }
+  return { rows, yearNet, inflation: fc.inflation };
+}
+
+// ---- Mantención -------------------------------------------------------------------------------------
+
+// Categorías sin movimientos en un año (ni recién creadas ni asociadas a un crédito o inversión): archivarlas
+// acorta la lista al registrar.
+export function unusedCategories({ days = 365 } = {}) {
+  const cut = addDays(todayStr(), -days);
+  const used = new Set();
+  for (const t of db.all('tx')) if (t.date >= cut) { const c = category(t.categoryId); if (c) used.add(c.id); }
+  const young = Date.now() - 60 * 864e5;
+  return categories().filter(c => !c.archived && !used.has(c.id) && !c.debtId && !c.invId && !(c.createdAt > young));
+}
+export async function archiveCategories(ids, undo = false) {
+  await db.putMany('categories', ids.map(id => db.get('categories', id)).filter(Boolean).map(c => ({ ...c, archived: !undo })));
+}
+
+// ¿El reparto por sueldos está viejo? (último período con más de `months` meses)
+export function splitAge() {
+  const list = db.all('splits').map(s => s.ym).sort();
+  if (!list.length || people().length < 2) return null;
+  const last = list.at(-1);
+  return { last, months: monthsBetween(last, curYm()).length - 1 };
+}
+
+// Cambiar varios movimientos a la vez (categoría y/o reparto); devuelve cómo estaban, para deshacer.
+export async function bulkUpdateTx(ids, { categoryId, alloc } = {}) {
+  const before = ids.map(id => db.get('tx', id)).filter(Boolean);
+  const after = before.filter(t => t.kind === 'out' || t.kind === 'in').map(t => ({ ...t, ...(categoryId ? { categoryId } : {}), ...(alloc ? { alloc } : {}) }));
+  await db.putMany('tx', after);
+  return before;
+}
+
 // ---- Asistentes: categoría propia para lo que se repite en "Otros" ----------------------------
 
 // Palabras de una descripción, sin tildes ni signos ("Netflix oct." → ["netflix", "oct"]).
@@ -1395,6 +1612,14 @@ export function pendingItems(ref = curYm(), { lastBackup = null, now = Date.now(
     const days = Math.floor((now - Date.parse(r.date + 'T12:00:00')) / 864e5);
     if (days > 35) items.push({ type: 'recon', key: 'recon:' + a.id, acc: a, days, since: r.date });
   }
+  // mantención: el resumen del mes recién cerrado (primeros días), un reparto por sueldos viejo y categorías sin uso
+  const day = Number(todayStr().slice(8));
+  const skipM = new Set((settings().pendingSkip || {})[ref] || []);
+  if (ref === curYm() && day <= 10 && db.count('tx') >= 20 && !skipM.has('summary')) items.push({ type: 'summary', key: 'summary', ym: addMonths(ref, -1) });
+  const sa = splitAge();
+  if (sa && sa.months >= 3 && !skipM.has('split')) items.push({ type: 'split', key: 'split', ...sa });
+  const unused = unusedCategories();
+  if (unused.length >= 5 && !skipM.has('unused')) items.push({ type: 'unused', key: 'unused', cats: unused });
   // lo que se repite en "Otros": una sola fila que abre la lista (no cuenta para el número del ícono)
   const sugs = categorySuggestions();
   if (sugs.length) items.push({ type: 'catsug', key: 'catsug', list: sugs });

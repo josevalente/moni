@@ -4,16 +4,16 @@
 // Actualizaciones atómicas: cada versión se descarga completa al instalarse (saltándose la caché del
 // CDN con ?v=VERSION) y se sirve solo desde su propia caché. Nunca se mezclan archivos de dos versiones.
 // Sube VERSION cada vez que publiques cambios.
-const VERSION = 'moni-v28';
+const VERSION = 'moni-v29';
 // el script del lector de comprobantes queda en su propia caché, entre versiones. Solo ese archivo: su
 // worker y su núcleo (wasm) los pide el propio lector y el navegador los guarda; interceptarlos lo colgaba.
 const OCR_CACHE = 'moni-ocr-lib-5.1.1';   // nombre nuevo: borra la caché anterior (guardaba también el núcleo)
 const isOcrLib = (u) => u === 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
-  './js/main.js', './js/db.js', './js/model.js', './js/fx.js', './js/prices.js', './js/ui.js', './js/charts.js', './js/ocr.js',
+  './js/main.js', './js/db.js', './js/model.js', './js/fx.js', './js/prices.js', './js/ui.js', './js/charts.js', './js/ocr.js', './js/drive.js',
   './js/views/home.js', './js/views/txs.js', './js/views/add.js', './js/views/close.js',
-  './js/views/invest.js', './js/views/debts.js', './js/views/settings.js', './js/views/reports.js', './js/views/account.js', './js/views/points.js', './js/views/insights.js', './js/views/properties.js', './js/views/analysis.js',
+  './js/views/invest.js', './js/views/debts.js', './js/views/settings.js', './js/views/reports.js', './js/views/account.js', './js/views/points.js', './js/views/insights.js', './js/views/properties.js', './js/views/analysis.js', './js/views/decisions.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-180.png',
 ];
 const scope = self.registration.scope;

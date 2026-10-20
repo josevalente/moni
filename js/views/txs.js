@@ -1,7 +1,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
-import { fill, h, modal } from '../ui.js';
-import { openTxForm } from './add.js';
+import { fill, h, modal, toast, confirmDialog } from '../ui.js';
+import { openTxForm, categoryPicker } from './add.js';
 import { renderAccount, openAccount } from './account.js';
 import { entryCalendar } from './insights.js';
 
@@ -43,7 +43,7 @@ export function txRow(tx, { showDate = false } = {}) {
       tx.currency !== base ? h('div', { class: 'sub' }, `≈ ${M.fmt(M.txBase(tx), base)}`) : null));
 }
 
-const state = { ym: null, q: '', filter: 'all' };
+const state = { ym: null, q: '', filter: 'all', sel: null };    // sel: movimientos marcados (modo selección)
 
 // Elegir una cuenta para ver su cartola (con su saldo y cuándo cuadró con el banco).
 export function pickAccount() {
@@ -92,6 +92,7 @@ export function renderTxs(root, sub) {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean).map(text => ({ text, num: /^-?[\d.,]+$/.test(text) && Number.isFinite(M.parseAmount(text)) ? M.parseAmount(text) : null }));
     fill(cal, q ? null : entryCalendar(state.ym));
     fill(chips, h('button', { class: 'chip more', onclick: pickAccount }, '🏦 Por cuenta'),
+      h('button', { class: 'chip more' + (state.sel ? ' on' : ''), 'aria-pressed': String(!!state.sel), onclick: () => { state.sel = state.sel ? null : new Set(); draw(); } }, state.sel ? '✕ Salir de selección' : '☑ Seleccionar'),
       ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), 'aria-pressed': String(state.filter === k), onclick: () => { state.filter = k; draw(); } }, l)));
     fill(head, q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [
       h('button', { class: 'icon-btn', onclick: () => { state.ym = M.addMonths(state.ym, -1); draw(); }, 'aria-label': 'Mes anterior' }, '‹'),
@@ -118,16 +119,64 @@ export function renderTxs(root, sub) {
         const d = new Date(tx.date + 'T12:00:00');
         out.push(h('div', { class: 'dayhead' }, d.toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'short', year: q ? 'numeric' : undefined })));
       }
-      out.push(txRow(tx));
+      out.push(state.sel ? selectableRow(tx) : txRow(tx));
     }
     if (!shown.length) out.push(h('p', { class: 'empty' }, q ? 'Nada coincide con la búsqueda.' : 'Sin movimientos este mes.'));
     if (q && total > 300) out.push(h('p', { class: 'muted center' }, `Mostrando 300 de ${M.fmtInt(total)}. Afina la búsqueda.`));
     fill(list, ...out);
+    // barra de acciones de la selección
+    visible = shown;
+    fill(bar, state.sel ? [selectionBar(), h('div', { class: 'sel-spacer', 'aria-hidden': 'true' })] : null);   // espacio para que la barra no tape lo último
     summary.textContent = total ? `${M.fmtInt(total)} mov. · gastos ${M.fmt(sumOut, M.base())} · ingresos ${M.fmt(sumIn, M.base())}` : '';
   }
   const summary = h('div', { class: 'muted center small' });
   const cal = h('div');
-  fill(root, h('div', { class: 'toolbar' }, search, chips), cal, head, summary, list);
+  const bar = h('div');
+  let visible = [];
+  // en modo selección, tocar un movimiento lo marca (no lo abre)
+  function selectableRow(tx) {
+    const on = state.sel.has(tx.id);
+    const row = txRow(tx);
+    row.classList.add('selectable');
+    if (on) row.classList.add('picked');
+    row.setAttribute('aria-pressed', String(on));
+    row.prepend(h('span', { class: 'pick-box', 'aria-hidden': 'true' }, on ? '✓' : ''));
+    row.addEventListener('click', (e) => { e.stopImmediatePropagation(); e.preventDefault(); if (state.sel.has(tx.id)) state.sel.delete(tx.id); else state.sel.add(tx.id); draw(); }, true);
+    return row;
+  }
+  const picked = () => [...state.sel].map(id => db.get('tx', id)).filter(Boolean);
+  const undoable = (before, msg) => toast(msg, { label: 'Deshacer', onAction: () => db.putMany('tx', before), ms: 8000 });
+  function selectionBar() {
+    const n = state.sel.size;
+    const flows = picked().filter(t => t.kind === 'out' || t.kind === 'in');
+    const allIn = flows.length && flows.every(t => t.kind === 'in');
+    return h('div', { class: 'sel-bar', role: 'toolbar', 'aria-label': 'Acciones con lo seleccionado' },
+      h('div', { class: 'sel-count' }, n ? `${n} seleccionado${n === 1 ? '' : 's'}` : 'Toca movimientos para marcarlos'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => { for (const t of visible) state.sel.add(t.id); draw(); } }, 'Todos'),
+      n ? h('button', { class: 'btn small', type: 'button', disabled: !flows.length, onclick: () => categoryPicker(allIn ? 'in' : 'out', null, async (id) => {
+        const before = await M.bulkUpdateTx([...state.sel], { categoryId: id });
+        undoable(before, `${flows.length} movimientos ahora en ${(M.category(id) || {}).name}`);
+        state.sel = new Set(); draw();
+      }) }, 'Categoría') : null,
+      n && M.people().length > 1 ? h('button', { class: 'btn small', type: 'button', disabled: !flows.length, onclick: () => pickAlloc(async (alloc, label) => {
+        const before = await M.bulkUpdateTx([...state.sel], { alloc });
+        undoable(before, `${flows.length} movimientos: ${label}`);
+        state.sel = new Set(); draw();
+      }) }, 'Reparto') : null,
+      n ? h('button', { class: 'btn small danger ghost', type: 'button', onclick: async () => {
+        if (!await confirmDialog(`¿Eliminar ${n} movimiento${n === 1 ? '' : 's'}?`, { ok: 'Eliminar' })) return;
+        const before = picked();
+        await db.delMany('tx', before.map(t => t.id));
+        undoable(before, `${n} eliminados`);
+        state.sel = new Set(); draw();
+      } }, 'Eliminar') : null);
+  }
+  function pickAlloc(onPick) {
+    const opts = [['shared', 'Compartido'], ['none', 'Solo de quien pagó'], ...M.people().map(p => ['p:' + p.id, `Solo de ${p.name}`])];
+    const m = modal('Reparto', h('div', { class: 'list' }, opts.map(([v, l]) => h('button', { class: 'row', type: 'button', onclick: () => { m.close(); onPick(v, l.toLowerCase()); } },
+      h('div', { class: 'main' }, h('div', { class: 'title' }, l))))));
+  }
+  fill(root, h('div', { class: 'toolbar' }, search, chips), cal, head, summary, list, bar);
   draw();
   return draw;
 }

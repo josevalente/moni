@@ -5,8 +5,10 @@ import * as FX from '../fx.js';
 import { fill, h, bars, modal, toast } from '../ui.js';
 import { openCategoryDetail } from './reports.js';
 import { openTxForm } from './add.js';
-import { showCloseMonth } from './close.js';
-import { exportBackup, reviewOwnCategories } from './settings.js';
+import { showCloseMonth, openSplitEditor } from './close.js';
+import { openMonthSummary } from './decisions.js';
+import { exportBackup, reviewOwnCategories, backupToDrive } from './settings.js';
+import * as Drive from '../drive.js';
 import { openAccount } from './account.js';
 import { paceCard, netWorthTrend, openNetWorth } from './insights.js';
 import { sparkline } from '../charts.js';
@@ -23,7 +25,11 @@ export function settleText(balance) {
 }
 
 const lastBackup = () => { try { return localStorage.getItem('moni.lastBackup'); } catch { return null; } };
-export const pendingNow = () => M.pendingItems(M.curYm(), { lastBackup: lastBackup() });
+export const pendingNow = () => {
+  const r = M.pendingItems(M.curYm(), { lastBackup: lastBackup() });
+  if (Drive.dueToday()) r.items = [...r.items.filter(i => i.type !== 'backup'), { type: 'drive', key: 'drive' }];   // la copia en Drive es el respaldo
+  return r;
+};
 // cuentas fijas vencidas: ya pasó su día habitual de este mes y no están registradas (lo que va en el ícono)
 const isOverdue = (i) => i.type === 'bill' && i.day < Number(M.todayStr().slice(8));
 export const overdueBills = () => pendingNow().items.filter(isOverdue);
@@ -31,6 +37,24 @@ const usableAcc = (id) => { const a = id && M.account(id); return a && !a.archiv
 const ago = (days) => (days === Infinity ? null : days >= 60 ? `hace ${Math.round(days / 30)} meses` : `hace ${days} días`);
 
 // ---- Pendientes del mes -----------------------------------------------------------
+
+// Categorías sin uso: se archivan las marcadas (no se borran; se pueden reactivar en Más › Categorías)
+function reviewUnused(cats) {
+  const checks = new Map();
+  const body = h('div', null,
+    h('p', { class: 'small' }, 'No tienen movimientos en el último año. Archivadas no aparecen al registrar; su historial se mantiene y puedes reactivarlas en Más › Categorías.'),
+    cats.map(c => { const cb = h('input', { type: 'checkbox', checked: true }); checks.set(c.id, cb); return h('label', { class: 'field check' }, cb, h('span', null, `${c.icon ? c.icon + ' ' : ''}${c.name}`)); }));
+  const m = modal('Categorías sin uso', body, {
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'), h('span', { class: 'spacer' }),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const ids = [...checks].filter(([, cb]) => cb.checked).map(([id]) => id);
+        m.close();
+        if (!ids.length) return;
+        await M.archiveCategories(ids);
+        toast(`${ids.length} categorías archivadas`, { label: 'Deshacer', onAction: () => M.archiveCategories(ids, true), ms: 8000 });
+      } }, 'Archivar marcadas')],
+  });
+}
 
 // Cuenta fija de monto estable: se registra en un toque con el monto de la última vez.
 async function registerFixed(b) {
@@ -107,6 +131,26 @@ function pendingRow(i, ref, root) {
     title = f.length === 1 ? `${f[0].name} sin actualizar` : `${f.length} inversiones sin actualizar`;
     sub = `${f.slice(0, 3).map(x => x.name).join(', ')}${f.length > 3 ? ` y ${f.length - 3} más` : ''} · ${ago(f[0].days)}`;
     action = h('button', { class: 'btn small', onclick: () => { location.hash = '#/mas/inversiones'; } }, 'Actualizar');
+  } else if (i.type === 'drive') {
+    icon = '☁️';
+    title = 'Copia de hoy en Google Drive';
+    sub = Drive.config().lastAt ? `La última: ${new Date(Drive.config().lastAt).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}` : 'Aún no hay copias';
+    action = h('button', { class: 'btn small', onclick: async () => { try { await backupToDrive(); } catch (e) { toast(`Google Drive: ${e.message || 'no se pudo'}`, { ms: 7000 }); } renderHome(root); } }, 'Respaldar');
+  } else if (i.type === 'summary') {
+    icon = '📊';
+    title = `Resumen de ${M.monthName(i.ym).toLowerCase()}`;
+    sub = 'Gasto contra un mes típico, lo que más cambió y el cierre';
+    action = h('button', { class: 'btn small', onclick: () => openMonthSummary(i.ym) }, 'Ver');
+  } else if (i.type === 'split') {
+    icon = '👥';
+    title = `El reparto por sueldos es de ${M.monthName(i.last).toLowerCase()}`;
+    sub = `Hace ${i.months} meses: si cambiaron los sueldos, los gastos compartidos se reparten mal`;
+    action = h('button', { class: 'btn small', onclick: () => openSplitEditor(ref) }, 'Actualizar');
+  } else if (i.type === 'unused') {
+    icon = '🗂️';
+    title = `${i.cats.length} categorías sin uso en un año`;
+    sub = i.cats.slice(0, 4).map(c => c.name).join(', ') + (i.cats.length > 4 ? '…' : '');
+    action = h('button', { class: 'btn small', onclick: () => reviewUnused(i.cats) }, 'Revisar');
   } else if (i.type === 'catsug') {
     // se repite en "Otros": su propia categoría (o mover a la que ya existe con ese nombre)
     icon = '🏷️';
@@ -124,6 +168,7 @@ function pendingRow(i, ref, root) {
     h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub)),
     h('div', { class: 'row-actions' }, action,
       i.type === 'bill' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir ${i.cat.name}`, onclick: () => skipBill(i, ref) }, '✕') : null,
+      ['summary', 'split', 'unused'].includes(i.type) ? h('button', { class: 'icon-btn small', 'aria-label': `Ocultar este mes: ${title}`, onclick: async () => { await M.skipPending(i.type, ref); toast('Oculto este mes'); } }, '✕') : null,
       i.type === 'recon' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir este mes: cuadrar ${i.acc.name}`, onclick: async () => {
         await M.skipPending('recon:' + i.acc.id, ref);
         toast('Omitido este mes');

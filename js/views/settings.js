@@ -10,6 +10,7 @@ import { renderPoints } from './points.js';
 import { renderProperties } from './properties.js';
 import { renderDebts } from './debts.js';
 import { openAccount } from './account.js';
+import * as Drive from '../drive.js';
 
 const KINDS = [
   { v: 'expense', l: 'Gasto' }, { v: 'income', l: 'Ingreso' }, { v: 'loan', l: 'Préstamo (no es gasto)' },
@@ -432,6 +433,75 @@ export async function exportBackup() {
   return false;
 }
 
+// Copia en Google Drive (cuenta como respaldo)
+export async function backupToDrive() {
+  const f = await Drive.upload(JSON.stringify(db.exportAll()));
+  try { localStorage.setItem('moni.lastBackup', new Date().toISOString()); } catch { /* ignore */ }
+  toast(`Copia guardada en Google Drive (${f.name})`);
+  return f;
+}
+const driveError = (e) => toast(`Google Drive: ${e && e.message ? e.message : 'no se pudo'}`, { ms: 7000 });
+
+function driveSection(root) {
+  const c = Drive.config();
+  if (!c.clientId) {
+    const idIn = h('input', { type: 'text', placeholder: '….apps.googleusercontent.com', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'ID de cliente de Google' });
+    return h('section', { class: 'card' }, h('h3', null, 'Copia diaria en Google Drive'),
+      h('p', null, 'Cada día, al abrir Moni, se guarda una copia en la carpeta "Moni respaldos" de tu Google Drive (se conservan las últimas 30). Moni solo puede ver los archivos que ella crea; nada más de tu Drive.'),
+      h('details', null, h('summary', null, 'Cómo obtener el ID de cliente (una vez, gratis, ~10 minutos)'),
+        h('ol', { class: 'steps' },
+          h('li', null, 'En el computador, entra a console.cloud.google.com con tu cuenta de Google y crea un proyecto (por ejemplo "Moni").'),
+          h('li', null, 'APIs y servicios › Biblioteca › busca "Google Drive API" › Habilitar.'),
+          h('li', null, 'APIs y servicios › Pantalla de consentimiento de OAuth: tipo Externo, nombre "Moni" y tu correo. En "Usuarios de prueba" agrega tu correo (puede quedar en modo de prueba).'),
+          h('li', null, 'Credenciales › Crear credenciales › ID de cliente de OAuth › Aplicación web. En "Orígenes autorizados de JavaScript" agrega: ', h('code', null, location.origin)),
+          h('li', null, 'Copia el "ID de cliente" y pégalo aquí. Al conectar, Google dirá que la app no está verificada: es tu propia app, toca Continuar.'))),
+      h('label', { class: 'field' }, h('span', null, 'ID de cliente'), idIn),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
+        const v = idIn.value.trim();
+        if (!/\.apps\.googleusercontent\.com$/.test(v)) { toast('Pega el ID de cliente (termina en .apps.googleusercontent.com)'); return; }
+        Drive.setConfig({ clientId: v });
+        try { await backupToDrive(); } catch (e) { driveError(e); }
+        renderBackup(root);
+      } }, 'Conectar y respaldar')));
+  }
+  return h('section', { class: 'card' }, h('h3', null, 'Copia diaria en Google Drive'),
+    h('p', { class: 'muted' }, c.lastAt ? `Última copia: ${new Date(c.lastAt).toLocaleString('es-CL')}${c.lastName ? ` (${c.lastName})` : ''}` : 'Aún no hay copias.'),
+    h('p', { class: 'muted small' }, 'Al abrir Moni, si hoy no hay copia aparece "Respaldar en Drive" en Pendientes: un toque (el iPhone no deja a una app web subir archivos sola).'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn primary', onclick: async () => { try { await backupToDrive(); } catch (e) { driveError(e); } renderBackup(root); } }, 'Respaldar ahora'),
+      h('button', { class: 'btn', onclick: () => restoreFromDrive() }, 'Restaurar desde Drive…'),
+      h('button', { class: 'btn ghost', onclick: async () => {
+        if (!await confirmDialog('Moni dejará de guardar copias en Google Drive. Las copias que ya están allí se quedan.', { ok: 'Desconectar', danger: false })) return;
+        Drive.disconnect(); renderBackup(root);
+      } }, 'Desconectar')));
+}
+
+async function restoreFromDrive() {
+  let list;
+  try { list = await Drive.backups(); } catch (e) { driveError(e); return; }
+  if (!list.length) { toast('No hay copias en la carpeta "Moni respaldos"'); return; }
+  const m = modal('Restaurar desde Google Drive', h('div', { class: 'list' }, list.slice(0, 30).map(f => h('button', { class: 'row', type: 'button', onclick: async () => {
+    m.close();
+    let payload;
+    try { payload = JSON.parse(await Drive.download(f.id)); } catch (e) { driveError(e); return; }
+    const mode = await new Promise((resolve) => {
+      const q = modal(f.name, h('p', null, 'Combinar mezcla la copia con lo de este teléfono (gana el cambio más reciente). Reemplazar deja este teléfono igual a la copia.'), {
+        actions: [h('button', { class: 'btn', onclick: () => { q.close(); resolve(null); } }, 'Cancelar'), h('span', { class: 'spacer' }),
+          h('button', { class: 'btn', onclick: () => { q.close(); resolve('merge'); } }, 'Combinar'),
+          h('button', { class: 'btn danger', onclick: () => { q.close(); resolve('replace'); } }, 'Reemplazar todo')],
+      });
+    });
+    if (!mode) return;
+    try {
+      const s = await db.importAll(payload, mode);
+      toast(mode === 'replace' ? 'Datos cargados desde Drive' : `Combinado: ${s.added} nuevos, ${s.updated} actualizados`);
+      if (mode === 'replace') location.hash = '#/';
+    } catch (e) { toast(e.message || 'No se pudo importar'); }
+  } },
+    h('div', { class: 'main' }, h('div', { class: 'title' }, f.name), h('div', { class: 'sub' }, new Date(f.createdTime).toLocaleString('es-CL') + (f.size ? ` · ${(f.size / 1048576).toFixed(1)} MB` : ''))),
+    h('div', { class: 'chev' }, '›')))));
+}
+
 function renderBackup(root) {
   const last = (() => { try { return localStorage.getItem('moni.lastBackup'); } catch { return null; } })();
   const stamp = () => new Date().toISOString().slice(0, 10);
@@ -483,6 +553,7 @@ function renderBackup(root) {
       h('p', { class: 'muted' }, last ? `Último respaldo: ${new Date(last).toLocaleString('es-CL')}` : 'Aún no has hecho un respaldo.'),
       storageLine, persistBtn,
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: doExport }, 'Exportar respaldo (JSON)'), h('button', { class: 'btn', onclick: () => shareFile(`moni-movimientos-${stamp()}.csv`, '﻿' + exportCsv(), 'text/csv') }, 'Exportar movimientos (CSV)'))),
+    driveSection(root),
     h('section', { class: 'card' }, h('h3', null, 'Importar'),
       h('p', { class: 'muted' }, 'Combinar mezcla un archivo con tus datos actuales: por cada registro gana el cambio más reciente. Sirve para juntar lo que registran dos personas en teléfonos distintos.'),
       h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => doImport('merge') }, 'Combinar con archivo…'), h('button', { class: 'btn danger', onclick: () => doImport('replace') }, 'Reemplazar todo…'))),
@@ -493,7 +564,7 @@ function renderBackup(root) {
           await db.wipe();
           // también las preferencias de este teléfono. Se vuelve a la bienvenida (importar un respaldo o empezar
           // de cero) en vez de crear personas nuevas que después se duplicarían al combinar
-          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt', 'moni.fcAlertHidden', 'moni.receiptAcc', 'moni.accOpen']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+          for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt', 'moni.fcAlertHidden', 'moni.receiptAcc', 'moni.accOpen', 'moni.gdrive']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
           location.hash = '#/'; toast('Datos borrados');
         }
       } }, 'Borrar todos los datos'))));
@@ -503,7 +574,18 @@ function renderBackup(root) {
 // Una app web no recibe datos de los atajos del iPhone directamente: el atajo copia la compra al
 // portapapeles y en Moni se pega con "📋 Pegar" (una sola vez por compra).
 function applePayHelp() {
-  modal('Registrar desde Apple Pay', h('div', null,
+  modal('Atajos del iPhone', h('div', null,
+    h('h3', null, 'Gasto rápido (con Siri o desde la pantalla de inicio)'),
+    h('p', null, 'Un atajo te pide el monto y en qué fue, lo deja copiado y en Moni lo registras con el botón 📋 (sobre el ＋): un solo toque.'),
+    h('ol', { class: 'steps' },
+      h('li', null, 'Abre la app Atajos › ＋ (nuevo atajo) y llámalo "Gasto en Moni".'),
+      h('li', null, 'Agrega "Solicitar entrada" › Número, con la pregunta "¿Cuánto?".'),
+      h('li', null, 'Agrega otra "Solicitar entrada" › Texto, con la pregunta "¿En qué?".'),
+      h('li', null, 'Agrega "Texto" y escribe: MONI|', h('i', null, 'Entrada 1'), '|', h('i', null, 'Entrada 2'), ' (toca para insertar las respuestas).'),
+      h('li', null, 'Agrega "Copiar al portapapeles" y "Mostrar notificación" con "Listo: abre Moni y toca 📋".'),
+      h('li', null, 'Opcional: Compartir › "Agregar a pantalla de inicio", o dile a Siri "Gasto en Moni".')),
+    h('p', { class: 'muted small' }, 'Los atajos no pueden abrir directamente una app agregada desde Safari: por eso el paso final es abrir Moni y tocar 📋. Las sugerencias ponen la categoría y la cuenta según tus registros anteriores.'),
+    h('h3', null, 'Registrar desde Apple Pay'),
     h('p', null, 'Con un atajo del iPhone, cada vez que pagas con Apple Pay la compra (monto y comercio) queda copiada. Luego, en Moni tocas ＋ y "📋 Pegar": se completa el monto y el comercio, y las sugerencias ponen la categoría y la cuenta.'),
     h('ol', { class: 'steps' },
       h('li', null, 'Abre la app Atajos › Automatización › Nueva automatización › Transacción.'),
@@ -537,7 +619,7 @@ export function renderMore(root, sub) {
       item('monedas', '💱', 'Monedas y tipo de cambio', 'CLP, USD, EUR, UF…')),
     h('section', { class: 'card' }, item('respaldo', '💾', 'Respaldo y datos', 'Exportar, importar y combinar'),
       h('button', { class: 'row link', onclick: applePayHelp }, h('div', { class: 'icon' }, '⚡'),
-        h('div', { class: 'main' }, h('div', { class: 'title' }, 'Registrar desde Apple Pay'), h('div', { class: 'sub' }, 'Un atajo del iPhone copia cada compra; en Moni la pegas')),
+        h('div', { class: 'main' }, h('div', { class: 'title' }, 'Atajos del iPhone'), h('div', { class: 'sub' }, 'Gasto rápido con Siri y compras de Apple Pay: en Moni las pegas con 📋')),
         h('div', { class: 'chev' }, '›'))),
     h('p', { class: 'muted center small' }, 'Moni · tus datos se guardan solo en este dispositivo'));
 }

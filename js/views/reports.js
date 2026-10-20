@@ -5,7 +5,8 @@ import { fill, h, modal } from '../ui.js';
 import { columnChart, heatTable, vizCard, dataTable, statTiles, compactMoney, lineChart } from '../charts.js';
 import { txRow } from './txs.js';
 import { editCategory, ownCategoryRow } from './settings.js';
-import { healthCard, forecastCard, yoyCard, fixedVarCard } from './analysis.js';
+import { healthCard, forecastCard, yoyCard, fixedVarCard, currentScenario } from './analysis.js';
+import { goalsCard, netWorthProjectionCard } from './decisions.js';
 
 const st = { view: 'months', period: '12', kind: 'expense', mode: 'total', by: 'category', extra: 'all', money: 'nom', month: null };
 
@@ -65,11 +66,14 @@ function renderAnalysis(root) {
   const redraw = () => renderAnalysis(root);
   // el escenario de arriendo actualiza solo la salud (la caja se actualiza sola, sin recrear sus campos)
   let hc = healthCard();
-  const refreshHealth = () => { const n = healthCard(); hc.replaceWith(n); hc = n; };
+  const nw = netWorthProjectionCard(currentScenario);
+  const refreshHealth = () => { const n = healthCard(); hc.replaceWith(n); hc = n; nw.redraw(); };
   fill(root,
     viewTabs(root),
     hc,
     forecastCard(refreshHealth),
+    goalsCard(),
+    nw,
     h('div', { class: 'section-head' }, h('h4', null, 'Tu gasto en el tiempo'),
       ps.length > 1 ? h('div', { class: 'seg small', role: 'group', 'aria-label': 'Alcance' }, [['total', 'Hogar'], ['mine', 'Mi parte']].map(([v, l]) => h('button', {
         type: 'button', class: st.mode === v ? 'on' : '', 'aria-pressed': String(st.mode === v), onclick: () => { st.mode = v; redraw(); },

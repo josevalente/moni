@@ -95,7 +95,7 @@ export function openTxForm(existing, defaults = {}) {
     return usable(lastAcc) || ((accounts.find(a => !a.archived) || {}).id) || null;
   }
 
-  const { focus: focusTarget, lastAmount: lastAmountDefault, lockAccount = false, ...rest } = defaults;
+  const { focus: focusTarget, lastAmount: lastAmountDefault, lockAccount = false, autoPaste = false, ...rest } = defaults;
   const s = {
     kind: 'out', date: today, amount: '', currency: null, accountId: null, toAccountId: null,
     categoryId: null, desc: '', paidBy: me, alloc: null, allocTouched: false, allocManual: false, fx: null, fxTouched: false,
@@ -324,7 +324,16 @@ export function openTxForm(existing, defaults = {}) {
     const same = db.all('tx').filter(t => t.kind === kind && near(t.date) && (!s.accountId || !t.accountId || t.accountId === s.accountId));
     const dup = same.find(t => Math.abs(t.amount - r.amount) < 0.5) || (kind === 'in' ? same.find(t => Math.abs(t.amount - r.amount) <= 0.25 * r.amount) : null);
     const what = (t) => [M.category(t.categoryId) && M.category(t.categoryId).name, t.desc].filter(Boolean).join(' · ');
+    // el comprobante trae los dígitos de tu cuenta pero ninguna cuenta los tiene: ofrecer guardarlos
+    const mine = kind === 'in' ? (r.accounts.to[0] || r.accounts.any[0]) : (r.accounts.from[0] || r.accounts.any[0]);
+    const accNow = M.account(s.accountId);
     if (dup) toast(`Ojo: ya hay ${dup.amount === r.amount ? 'un movimiento' : 'uno parecido'} de ${M.fmt(dup.amount, dup.currency)} el ${dup.date.slice(8)}/${dup.date.slice(5, 7)}${what(dup) ? ` (${what(dup)})` : ''}. Revisa antes de guardar.`, { ms: 9000 });
+    else if (!from && !to && !any && mine && accNow && !accNow.last4) {
+      toast(`El comprobante es de la cuenta ••${mine}. ¿Es ${accNow.name}?`, { label: 'Sí, recordarla', ms: 10000, onAction: async () => {
+        await db.put('accounts', { ...M.account(accNow.id), last4: mine });
+        toast(`Listo: los comprobantes de ••${mine} irán a ${accNow.name}`);
+      } });
+    }
     else toast(`Comprobante leído: ${M.fmt(r.amount, s.currency)}${s.categoryId ? '' : '. Elige la categoría'}`);
     if (kind !== 'transfer' && !s.categoryId) { descIn.focus(); updateSuggestions(); }
   }
@@ -692,5 +701,7 @@ export function openTxForm(existing, defaults = {}) {
   // foco dentro del mismo toque que abrió el formulario: así iOS muestra el teclado.
   // Gastos e ingresos parten por la descripción (la llevan 8 de cada 10 movimientos).
   if (!isEdit) ((focusTarget === 'amount' || !(s.kind === 'out' || s.kind === 'in')) ? amountIn : descIn).focus();
+  // botón 📋 de Inicio: pega lo copiado en el mismo toque (el portapapeles exige que lo pida un toque)
+  if (autoPaste && !isEdit) pasteAny();
   return m;
 }

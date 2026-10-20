@@ -47,6 +47,9 @@ export function healthCard() {
         'Bajo 50% es holgado; los créditos hipotecarios lo suben al comienzo.')));
 }
 
+// El escenario simulado en la caja (arriendo y gasto ajustado), para otras tarjetas (patrimonio a 10 años).
+export const currentScenario = () => ({ rent: fcView.rent && fcView.uf ? { uf: fcView.uf, adminPct: fcView.adminPct, from: fcView.from } : null, spend: fcView.spend });
+
 // Con el arriendo simulado abajo, la carga de los dividendos se mide sobre el líquido más el arriendo neto.
 function rentHint(m, c) {
   if (!fcView.rent || !fcView.uf || !m.income) return 'Un arriendo lo baja: simúlalo abajo en la caja.';

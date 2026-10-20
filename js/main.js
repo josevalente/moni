@@ -66,6 +66,9 @@ function draw() {
   const fab = document.getElementById('fab');
   fab.hidden = !db.count('people');
   fab.setAttribute('aria-label', fabAction().label);
+  // 📋 sobre el ＋ en Inicio y Movimientos: abre el formulario y pega (atajo "Gasto rápido", Apple Pay, comprobante)
+  const fabPaste = document.getElementById('fab-paste');
+  if (fabPaste) fabPaste.hidden = !db.count('people') || !(tab === '' || (tab === 'movs' && !sub)) || !(navigator.clipboard && navigator.clipboard.readText);
   if (!db.count('people')) { fill(app, welcome()); refresh = null; return; }
   const key = location.hash;
   const body = h('div', { class: 'page' });
@@ -129,6 +132,8 @@ async function resetAppCache() {
 async function start() {
   await db.open();
   document.getElementById('fab').addEventListener('click', () => fabAction().run());
+  const fp = document.getElementById('fab-paste');
+  if (fp) fp.addEventListener('click', () => openTxForm(null, { autoPaste: true }));
   if (!navigator.onLine) document.body.classList.add('offline');
   draw();
   window.__moniStarted = true;

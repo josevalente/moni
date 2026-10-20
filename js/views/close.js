@@ -4,6 +4,7 @@ import * as M from '../model.js';
 import { fill, h, modal, toast, parseNum, numText } from '../ui.js';
 import { openTxForm } from './add.js';
 import { txRow } from './txs.js';
+import { openMonthSummary } from './decisions.js';
 
 const st = { ym: null };
 
@@ -120,7 +121,8 @@ export function renderClose(root) {
           const text = summaryText(led);
           if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
           try { await navigator.clipboard.writeText(text); toast('Resumen copiado'); } catch { modal('Resumen', h('pre', { class: 'pre' }, text)); }
-        } }, 'Compartir resumen'))),
+        } }, 'Compartir cierre'),
+        ym < M.curYm() ? h('button', { class: 'btn', onclick: () => openMonthSummary(ym) }, 'Resumen del mes') : null)),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' }, h('h3', null, 'Reparto del mes'), h('button', { class: 'btn small', onclick: () => openSplitEditor(ym) }, 'Cambiar')),
       h('div', { class: 'pctbar' }, ppl.map(p => h('div', { style: { flex: String(Math.max(led.pct[p.id], 0.001)) }, class: 'pct p' + ppl.indexOf(p) }, `${p.name} ${pctText(led.pct[p.id])}`))),

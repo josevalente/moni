@@ -2,6 +2,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import { fill, h, modal, toast, formModal } from '../ui.js';
+import { openPrepay } from './decisions.js';
 
 const DIR = [{ v: 'owe', l: 'Yo debo' }, { v: 'owed', l: 'Me deben' }];
 
@@ -81,6 +82,7 @@ function openDetail(id) {
         ? `Cuota ${d.cuota + 1} de ${d.cuotas}: dividendo ${M.fmt(d.mortgage.rows[d.cuota][6], d.currency)} (amortización ${M.fmt(d.mortgage.rows[d.cuota][1], d.currency)}). El saldo baja solo con cada cuota según la tabla de desarrollo.`
         : 'Crédito pagado.') : null,
       h('div', { class: 'actions' },
+        d.mortgage && d.cuota < d.cuotas ? h('button', { class: 'btn primary', onclick: () => openPrepay(d.id) }, 'Simular prepago') : null,
         d.mortgage ? null : h('button', { class: 'btn primary', onclick: () => addEntry(d, -1) }, 'Registrar pago'),
         d.mortgage ? null : h('button', { class: 'btn', onclick: () => addEntry(d, 1) }, 'Aumentar'),
         h('button', { class: 'btn ghost', onclick: () => editDebt(db.get('debts', d.id)) }, 'Editar')),
