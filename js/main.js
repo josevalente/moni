@@ -2,7 +2,7 @@ import * as db from './db.js';
 import * as M from './model.js';
 import * as FX from './fx.js';
 import { fill, h, toast } from './ui.js';
-import { renderHome, pendingNow } from './views/home.js';
+import { renderHome, overdueBills } from './views/home.js';
 import { renderTxs } from './views/txs.js';
 import { renderClose } from './views/close.js';
 import { renderMore } from './views/settings.js';
@@ -77,11 +77,12 @@ function draw() {
   updateBadge();
 }
 
-// Número de pendientes sobre el ícono de la app (iPhone con iOS 16.4+, si se permitieron notificaciones).
+// Número sobre el ícono de la app (iPhone con iOS 16.4+, si se permitieron notificaciones): solo las cuentas
+// fijas vencidas sin registrar. Se actualiza al abrir o volver a la app (sin servidor no puede hacerlo cerrada).
 function updateBadge() {
   if (!('setAppBadge' in navigator) || !db.count('people')) return;
   try {
-    const n = pendingNow().items.filter(i => i.type !== 'catsug').length;   // las sugerencias no son tareas
+    const n = overdueBills().length;
     (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
   } catch { /* ignore */ }
 }

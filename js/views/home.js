@@ -24,6 +24,9 @@ export function settleText(balance) {
 
 const lastBackup = () => { try { return localStorage.getItem('moni.lastBackup'); } catch { return null; } };
 export const pendingNow = () => M.pendingItems(M.curYm(), { lastBackup: lastBackup() });
+// cuentas fijas vencidas: ya pasó su día habitual de este mes y no están registradas (lo que va en el ícono)
+const isOverdue = (i) => i.type === 'bill' && i.day < Number(M.todayStr().slice(8));
+export const overdueBills = () => pendingNow().items.filter(isOverdue);
 const usableAcc = (id) => { const a = id && M.account(id); return a && !a.archived ? id : null; };
 const ago = (days) => (days === Infinity ? null : days >= 60 ? `hace ${Math.round(days / 30)} meses` : `hace ${days} días`);
 
@@ -84,7 +87,7 @@ function pendingRow(i, ref, root) {
   if (i.type === 'bill') {
     icon = i.cat.icon || '🧾';
     title = i.cat.name;
-    sub = `~día ${i.day} · ${i.fixed ? '' : 'último '}${M.fmt(i.template.amount, i.template.currency)}`;
+    sub = `${isOverdue(i) ? `⚠️ venció ~día ${i.day}` : `~día ${i.day}`} · ${i.fixed ? '' : 'último '}${M.fmt(i.template.amount, i.template.currency)}`;
     action = i.fixed
       ? h('button', { class: 'btn small', onclick: () => registerFixed(i) }, 'Registrar')
       : h('button', { class: 'btn small', onclick: () => registerVariable(i) }, 'Registrar…');
@@ -152,7 +155,7 @@ function pendingCard(root) {
       h('div', { class: 'icon', 'aria-hidden': 'true' }, '🧾'),
       h('div', { class: 'main' },
         h('div', { class: 'title' }, `${fixedSoon.length} cuentas fijas`),
-        h('div', { class: 'sub' }, `${M.fmt(fixedTotal, M.base())} · ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` y ${names.length - 3} más` : ''}`)),
+        h('div', { class: 'sub' }, `${fixedSoon.some(isOverdue) ? `⚠️ ${fixedSoon.filter(isOverdue).length} vencida${fixedSoon.filter(isOverdue).length === 1 ? '' : 's'} · ` : ''}${M.fmt(fixedTotal, M.base())} · ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` y ${names.length - 3} más` : ''}`)),
       h('div', { class: 'row-actions' }, h('button', { class: 'btn small primary', onclick: () => registerMany(fixedSoon) }, 'Registrar todas'))) : null,
     grouped ? h('button', { class: 'link-row small', onclick: () => { st.fixedOpen = !st.fixedOpen; renderHome(root); } }, st.fixedOpen ? 'Ocultar el detalle' : 'Ver una por una') : null,
     grouped && st.fixedOpen ? fixedSoon.map(i => pendingRow(i, ref, root)) : null,
@@ -164,7 +167,7 @@ function pendingCard(root) {
       try { await Notification.requestPermission(); } catch { /* ignore */ }
       window.dispatchEvent(new Event('moni:badge'));
       renderHome(root);
-    } }, 'Mostrar el número de pendientes en el ícono de la app') : null);
+    } }, 'Mostrar en el ícono de la app las cuentas vencidas') : null);
 }
 
 // ---- Ingresos del mes por categoría (como el gasto); los extraordinarios, marcados ------------

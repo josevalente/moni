@@ -281,7 +281,7 @@ export function openTxForm(existing, defaults = {}) {
       const { imageText } = await import('../ocr.js');
       text = await imageText(blob);
     } catch {
-      toast('No se pudo leer la imagen. La primera vez se necesita conexión para descargar el lector.');
+      toast('No se pudo leer la imagen. Revisa la conexión (la primera vez se descarga el lector) e inténtalo de nuevo.', { ms: 7000 });
       return;
     }
     const r = M.parseReceipt(text);

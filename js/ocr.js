@@ -38,16 +38,24 @@ async function toPng(blob) {
   return new Promise((resolve) => cv.toBlob((b) => resolve(b || blob), 'image/png'));
 }
 
+// con tiempo límite: si el lector se traba (red a medias, teléfono sin memoria) se descarta y el próximo
+// intento parte de cero, en vez de quedar esperando para siempre
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+async function reset() { const w = worker; worker = null; try { if (w) await w.terminate(); } catch { /* ignore */ } }
+
 // onProgress(0..1) mientras lee
 export async function imageText(blob, onProgress) {
   const png = await toPng(blob).catch(() => blob);
   await loadLib();
   progress = onProgress || null;
-  if (!worker) {
-    worker = await window.Tesseract.createWorker('spa', 1, {
-      logger: (m) => { if (progress && m.status === 'recognizing text') progress(m.progress); },
-    });
-  }
-  const { data } = await worker.recognize(png);
-  return data.text || '';
+  try {
+    if (!worker) {
+      // la primera vez descarga el idioma (~4 MB): más plazo
+      worker = await withTimeout(window.Tesseract.createWorker('spa', 1, {
+        logger: (m) => { if (progress && m.status === 'recognizing text') progress(m.progress); },
+      }), 90000);
+    }
+    const { data } = await withTimeout(worker.recognize(png), 60000);
+    return data.text || '';
+  } catch (e) { await reset(); throw e; }
 }
