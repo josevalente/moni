@@ -11,6 +11,7 @@ import { renderProperties } from './properties.js';
 import { renderDebts } from './debts.js';
 import { openAccount } from './account.js';
 import * as Drive from '../drive.js';
+import { renderTax } from './tax.js';
 
 const KINDS = [
   { v: 'expense', l: 'Gasto' }, { v: 'income', l: 'Ingreso' }, { v: 'loan', l: 'Préstamo (no es gasto)' },
@@ -565,6 +566,7 @@ function renderBackup(root) {
           // también las preferencias de este teléfono. Se vuelve a la bienvenida (importar un respaldo o empezar
           // de cero) en vez de crear personas nuevas que después se duplicarían al combinar
           for (const k of ['moni.fxLast', 'moni.lastBackup', 'moni.lastAccount', 'moni.me', 'moni.recon', 'moni.tdKey', 'moni.pxLastAt', 'moni.fxLastAt', 'moni.fcAlertHidden', 'moni.receiptAcc', 'moni.accOpen', 'moni.gdrive']) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+          try { for (const k of Object.keys(localStorage)) if (k.startsWith('moni.uta.')) localStorage.removeItem(k); } catch { /* ignore */ }
           location.hash = '#/'; toast('Datos borrados');
         }
       } }, 'Borrar todos los datos'))));
@@ -602,6 +604,7 @@ export function renderMore(root, sub) {
   if (sub === 'inversiones') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
   if (sub === 'propiedades') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Propiedades'), inner); renderProperties(inner); return () => renderProperties(inner); }
   if (sub === 'puntos') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Puntos y millas'), inner); renderPoints(inner); return () => renderPoints(inner); }
+  if (sub === 'renta') { renderTax(root, back()); return () => renderTax(root, back()); }
   if (sub === 'deudas') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
   if (subs[sub]) { const r = subs[sub](root); return typeof r === 'function' ? r : () => subs[sub](root); }
   const item = (to, icon, title, sub2) => h('a', { class: 'row link', href: '#/mas/' + to }, h('div', { class: 'icon' }, icon), h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub2)), h('div', { class: 'chev' }, '›'));
@@ -617,7 +620,8 @@ export function renderMore(root, sub) {
       item('reparto', '⚖️', 'Reparto mensual', 'Sueldos o % que definen el cobro'),
       item('personas', '👥', 'Personas', 'Quiénes participan y este dispositivo'),
       item('monedas', '💱', 'Monedas y tipo de cambio', 'CLP, USD, EUR, UF…')),
-    h('section', { class: 'card' }, item('respaldo', '💾', 'Respaldo y datos', 'Exportar, importar y combinar'),
+    h('section', { class: 'card' }, item('renta', '🧾', 'Resumen para el contador', 'Declaración de renta: lo relevante de un año para el SII'),
+      item('respaldo', '💾', 'Respaldo y datos', 'Exportar, importar y combinar'),
       h('button', { class: 'row link', onclick: applePayHelp }, h('div', { class: 'icon' }, '⚡'),
         h('div', { class: 'main' }, h('div', { class: 'title' }, 'Atajos del iPhone'), h('div', { class: 'sub' }, 'Gasto rápido con Siri y compras de Apple Pay: en Moni las pegas con 📋')),
         h('div', { class: 'chev' }, '›'))),

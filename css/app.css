@@ -511,3 +511,28 @@ select:disabled { opacity: .65; }
 .rvs-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 10px; }
 .month-summary .kpis small { display: inline; font-size: 12px; }
 details summary { cursor: pointer; font-weight: 600; margin: 6px 0; }
+/* resumen para el contador */
+.tax-preview { overflow-x: auto; }
+.tax-report h1 { font-size: 17px; margin: 0 0 4px; }
+.tax-report h2 { font-size: 14px; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 2px solid var(--brand); color: var(--ink); }
+.tax-report h3 { font-size: 13px; margin: 10px 0 4px; }
+.tx-note { color: var(--muted); font-size: 12px; margin: 4px 0; }
+.tx-tbl { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 13px; }
+.tx-tbl th, .tx-tbl td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.tx-tbl th { font-weight: 600; color: var(--muted); }
+.tx-tbl .r { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tx-tbl tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
+.tx-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+.tx-kpis div { border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+.tx-kpis span { display: block; font-size: 12px; color: var(--muted); }
+.tx-kpis b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.tax-report ul { margin: 4px 0 8px 18px; padding: 0; font-size: 13px; }
+#print-area { display: none; }
+@media print {
+  body.printing > *:not(#print-area) { display: none !important; }
+  body.printing #print-area { display: block; color: #000; background: #fff; font-size: 12px; }
+  body.printing #print-area * { color: #000 !important; }
+  body.printing #print-area details > summary { display: none; }
+  body.printing #print-area tr { break-inside: avoid; }
+}
+.tax-report .tx-head p { font-size: 13px; }

@@ -1320,6 +1320,120 @@ export async function bulkUpdateTx(ids, { categoryId, alloc } = {}) {
   return before;
 }
 
+// ---- Resumen para la declaración de renta (para el contador) -------------------------------------
+// Año comercial `year` (se declara en abril del año siguiente). Solo datos del dueño de las cuentas, en pesos
+// (cada movimiento a su tipo de cambio del día). Es un resumen de apoyo: los montos oficiales salen de los
+// certificados (empleador, bancos, AFP, corredoras) y de la propuesta del SII.
+const TAX_RX = {
+  salary: /sueldo|remuneraci|salario|bono|gratificaci|aguinaldo|honorario|liquidaci/,
+  dividend: /dividendo|utilidad|retiro de/,
+  interest: /\bdap\b|inter[eé]s|dep[oó]sito a plazo/,
+  rent: /arriendo/,
+  tax: /impuesto/,
+  apv: /\bapv\b|ahorro previsional|deposito convenido|dep[oó]sito convenido/,
+  donation: /donaci/,
+  education: /colegio|educaci|jard[ií]n infantil|universidad|matr[ií]cula|escolar/,
+  contrib: /contribuc/,
+};
+export function taxSummary(year) {
+  const owner = ownerId();
+  const y = String(year), from = `${y}-01-01`, to = `${y}-12-31`, prevEnd = `${Number(y) - 1}-12-31`;
+  const inYear = (d) => d >= from && d <= to;
+  const name = (c) => normKey((c && c.name) || '');
+  const months = monthsBetween(`${y}-01`, `${y}-12`);
+  const emptyM = () => months.map(() => 0);
+  const mi = (d) => Number(d.slice(5, 7)) - 1;
+  // ingresos del dueño por categoría y mes
+  const income = new Map();
+  const add = (map, cat, d, v, t) => { let e = map.get(cat.id); if (!e) map.set(cat.id, (e = { cat, total: 0, months: emptyM(), count: 0, txs: [] })); e.total += v; e.months[mi(d)] += v; e.count++; if (t) e.txs.push(t); };
+  const linkedDiv = new Set(db.all('invEntries').filter(e => e.kind === 'dividend' && e.txId).map(e => e.txId));
+  const deductions = new Map(), expenses = new Map();
+  for (const t of db.all('tx')) {
+    if (!inYear(t.date) || (t.kind !== 'in' && t.kind !== 'out')) continue;
+    const cat = category(t.categoryId);
+    if (!cat) continue;
+    if (t.paidBy !== owner) continue;
+    const v = txBase(t);
+    if (t.kind === 'in' && cat.kind === 'income') { if (!linkedDiv.has(t.id)) add(income, cat, t.date, v, t); continue; }
+    if (cat.kind !== 'expense') continue;
+    const sign = t.kind === 'in' ? -1 : 1;
+    if (isPayrollDeduction(cat)) add(deductions, cat, t.date, sign * v);
+    else if ([TAX_RX.apv, TAX_RX.donation, TAX_RX.education, TAX_RX.contrib].some(rx => rx.test(name(cat)))) add(expenses, cat, t.date, sign * v);
+  }
+  const groupOf = (c) => (c.extraordinary ? 'extra' : TAX_RX.dividend.test(name(c)) ? 'dividend' : TAX_RX.interest.test(name(c)) ? 'interest' : TAX_RX.rent.test(name(c)) ? 'rent' : TAX_RX.salary.test(name(c)) ? 'salary' : 'other');
+  // para las categorías genéricas, de qué está hecho el monto (por descripción)
+  const incomeRows = [...income.values()].map(e => {
+    const group = groupOf(e.cat);
+    // byDescription resta los ingresos (los trata como devoluciones de gasto): aquí van en positivo
+    const detail = group === 'other' || group === 'extra' ? byDescription(e.txs).map(g => ({ label: String(g.txs[0].desc || '(sin descripción)').trim().slice(0, 48), total: -g.total, count: g.count })).sort((p, q) => q.total - p.total).slice(0, 8) : null;
+    return { cat: e.cat, total: e.total, months: e.months, count: e.count, group, detail };
+  }).sort((a, b) => b.total - a.total);
+  const dedRows = [...deductions.values()].map(e => ({ ...e, isTax: TAX_RX.tax.test(name(e.cat)) })).sort((a, b) => b.total - a.total);
+  const expRows = [...expenses.values()].map(e => ({ ...e, group: TAX_RX.apv.test(name(e.cat)) ? 'apv' : TAX_RX.donation.test(name(e.cat)) ? 'donation' : TAX_RX.education.test(name(e.cat)) ? 'education' : 'contrib' }));
+  // inversiones: lo del año y el saldo al 31 de diciembre (en su moneda y en pesos)
+  const rateEnd = (cur) => (cur === base() ? 1 : rateFor(cur, to) ?? null);
+  const investments = db.all('investments').filter(i => !isPoints(i) && !isProperty(i)).map(i => {
+    const a = fundStats(i, to), b = fundStats(i, prevEnd);
+    const divs = investmentEntries(i.id).filter(e => e.kind === 'dividend' && inYear(e.date));
+    const r = rateEnd(i.currency);
+    return {
+      inv: i, currency: i.currency, balance: a.balance, balanceBase: r != null ? a.balance * r : null,
+      contrib: a.contrib - b.contrib, withdraw: a.withdraw - b.withdraw, realized: a.realized - b.realized,
+      // rentabilidad del año: cambio de valor menos lo aportado neto, más dividendos pagados (en un depósito a plazo, sus intereses)
+      gainYear: a.balance - b.balance - ((a.contrib - b.contrib) - (a.withdraw - b.withdraw)) + (a.divPaid - b.divPaid), balanceStart: b.balance,
+      dividends: divs.reduce((s, e) => s + (e.amount || 0), 0), dividendList: divs.map(e => ({ date: e.date, amount: e.amount, reinvested: !!e.reinvested })),
+      units: isUnits(i), qty: a.qty,
+    };
+  }).filter(x => Math.abs(x.balance) > 0.005 || x.contrib || x.withdraw || x.dividends);
+  // bienes raíces: tasación, crédito, intereses y dividendos pagados en el año (de la tabla), contribuciones y arriendos
+  const ufEnd = rateFor('UF', to) || null;
+  const properties = db.all('investments').filter(isProperty).map(p => {
+    const s = propertyStats(p, to);
+    const d = s.mortgage;
+    let interest = 0, interestUF = 0, paid = 0, paidUF = 0, cuotas = 0;
+    if (d && d.mortgage) {
+      const k0 = cuotasPaid(d, prevEnd), k1 = cuotasPaid(d, to);
+      for (let n = k0 + 1; n <= k1; n++) {
+        const row = d.mortgage.rows[n - 1];
+        const due = addMonths(ymOf(d.mortgage.first), n - 1) + d.mortgage.first.slice(7);
+        const ufd = d.currency === 'UF' ? (rateFor('UF', due) || ufEnd || 0) : (rateFor(d.currency, due) ?? 1);
+        interestUF += row[2]; interest += row[2] * ufd; paidUF += row[6]; paid += row[6] * ufd; cuotas++;
+      }
+    }
+    const tag = p.tag;
+    const rentIn = tag ? db.all('tx').filter(t => t.kind === 'in' && inYear(t.date) && t.tag === tag && t.paidBy === owner && (category(t.categoryId) || {}).kind === 'income').reduce((a, t) => a + txBase(t), 0) : 0;
+    const contrib = tag ? db.all('tx').filter(t => t.kind === 'out' && inYear(t.date) && t.tag === tag && TAX_RX.contrib.test(name(category(t.categoryId)))).reduce((a, t) => a + txBase(t), 0) : null;
+    const rp = rateFor(p.currency, to) ?? 1;
+    return {
+      p, value: s.value, valueBase: s.value * rp, currency: p.currency, debt: s.debt, debtBase: s.debt * rp, partnerClaim: s.partnerClaim,
+      mortgage: d ? { name: d.name, cuotas, interest, interestUF, paid, paidUF, currency: d.currency } : null, rentIn, contrib, archived: !!p.archived,
+    };
+  }).filter(x => x.value > 0 || (x.mortgage && x.mortgage.cuotas));     // solo las que eran tuyas ese año
+  // cuentas y deudas al 31 de diciembre; las de otra moneda se marcan (pueden ser cuentas en el extranjero)
+  const accounts = db.all('accounts').map(a => {
+    const bal = balanceOn(accountLedger(a.id), to);
+    const r = rateEnd(a.currency);
+    return { acc: a, currency: a.currency, balance: bal, balanceBase: r != null && currencyInfo(a.currency).convertible !== false ? bal * r : null, foreign: a.currency !== base() };
+  }).filter(x => Math.abs(x.balance) > 0.005);
+  const debts = db.all('debts').map(d => { const bal = debtBalanceAt(d, to); const r = rateEnd(d.currency); return { debt: d, currency: d.currency, balance: bal, balanceBase: r != null ? bal * r : null }; }).filter(x => Math.abs(x.balance) > 0.005);
+  const sum = (rows, f = () => true) => rows.filter(f).reduce((a, x) => a + x.total, 0);
+  return {
+    year: Number(y), person: personName(owner), generated: todayStr(), uf: ufEnd, months,
+    income: incomeRows, deductions: dedRows, expenses: expRows,
+    totals: {
+      salary: sum(incomeRows, r => r.group === 'salary'), dividend: sum(incomeRows, r => r.group === 'dividend') + investments.reduce((a, x) => a + x.dividends * (rateEnd(x.currency) ?? 1), 0),
+      interest: sum(incomeRows, r => r.group === 'interest'), rent: sum(incomeRows, r => r.group === 'rent') + properties.reduce((a, x) => a + x.rentIn, 0),
+      other: sum(incomeRows, r => r.group === 'other'), extra: sum(incomeRows, r => r.group === 'extra'),
+      taxWithheld: sum(dedRows, r => r.isTax), deductions: sum(dedRows),
+      mortgageInterest: properties.reduce((a, x) => a + (x.mortgage ? x.mortgage.interest : 0), 0),
+      apv: sum(expRows, r => r.group === 'apv'), donation: sum(expRows, r => r.group === 'donation'), education: sum(expRows, r => r.group === 'education'), contrib: sum(expRows, r => r.group === 'contrib'),
+    },
+    investments, properties, accounts, debts,
+  };
+}
+// años con movimientos, para elegir (por defecto el último año cerrado)
+export const taxYears = () => { const ys = txYears().map(Number).filter(n => n < Number(curYm().slice(0, 4)) + 1); return ys.length ? ys : [Number(curYm().slice(0, 4)) - 1]; };
+
 // ---- Asistentes: categoría propia para lo que se repite en "Otros" ----------------------------
 
 // Palabras de una descripción, sin tildes ni signos ("Netflix oct." → ["netflix", "oct"]).
