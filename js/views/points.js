@@ -42,7 +42,7 @@ export function editProgram(p) {
     fields: [
       { key: 'name', label: 'Nombre', type: 'text', required: true, placeholder: 'Ej: millas de aerolínea' },
       { key: 'currency', label: 'Unidad', type: 'select', options: M.settings().currencies.map(c => ({ v: c.code, l: c.code + (c.convertible === false ? ' (puntos, sin tipo de cambio)' : '') })),
-        hint: 'Para millas o puntos usa una unidad sin conversión (Más › Monedas). Dólares-Premio puede ir en USD.' },
+        hint: 'Para millas o puntos usa una unidad sin conversión (Más › Monedas). Los puntos que se canjean por dólares pueden ir en USD.' },
       { key: 'pointValue', label: `Valor de 1 unidad en ${M.base()} (opcional)`, type: 'number', hint: 'Para estimar cuánto valen. Si la unidad es una moneda (USD), se usa su tipo de cambio.' },
       { key: 'inNetWorth', label: 'Sumar a mi patrimonio', type: 'check' },
       { key: 'expires', label: 'Vencen el (opcional)', type: 'date' },
@@ -98,7 +98,7 @@ export function renderPoints(root) {
   const inNW = list.filter(p => p.inNetWorth && p.valueBase != null).reduce((a, p) => a + p.valueBase, 0);
   const soon = M.addDays(M.todayStr(), 60);
   fill(root,
-    h('p', { class: 'muted' }, 'Dólares-Premio, millas y puntos: no son inversión, así que no entran a los gráficos ni al total invertido. Suman a tu patrimonio solo si lo marcas en cada programa.'),
+    h('p', { class: 'muted' }, 'Millas y puntos: no son inversión, así que no entran a los gráficos ni al total invertido. Suman a tu patrimonio solo si lo marcas en cada programa.'),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' }, h('h3', null, 'Programas'), h('button', { class: 'btn primary small', onclick: () => editProgram(null) }, '＋ Nuevo')),
       list.length ? list.map(p => h('button', { class: 'row', onclick: () => openProgram(p.id) },
