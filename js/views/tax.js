@@ -1,6 +1,6 @@
 // Resumen para el contador: lo relevante para la declaración anual de renta (Formulario 22 del SII) de un año
-// comercial, con lo registrado en Moni. Se comparte como archivo (se abre en cualquier navegador e imprime), como
-// PDF (imprimir) o como CSV para Excel. Es de apoyo: los montos oficiales vienen de los certificados y de la
+// comercial, con lo registrado en Moni. Se comparte como PDF, como página web (se abre en cualquier navegador) o
+// como CSV para Excel. Es de apoyo: los montos oficiales vienen de los certificados y de la
 // propuesta del SII.
 import * as M from '../model.js';
 import { fill, h, shareFile, toast } from '../ui.js';
@@ -12,11 +12,12 @@ const amt = (v, cur) => (v == null ? '—' : M.fmt(v, cur));
 const nf2 = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 2 });
 const GROUP = { salary: 'Remuneraciones', dividend: 'Dividendos y retiros', interest: 'Intereses', rent: 'Arriendos', other: 'Otros ingresos', extra: 'Ingresos no recurrentes' };
 
-// tabla simple (en pantalla y en el archivo); la primera columna a la izquierda, el resto a la derecha
-const table = (head, rows, foot) => h('table', { class: 'tx-tbl' },
+// tabla simple (en pantalla y en el archivo); la primera columna a la izquierda, el resto a la derecha. Va en un
+// contenedor que se desplaza de lado si no cabe: en el teléfono las tablas anchas no desbordan la página
+const table = (head, rows, foot) => h('div', { class: 'tx-scroll' }, h('table', { class: 'tx-tbl' },
   h('thead', null, h('tr', null, head.map((c, i) => h('th', { class: i ? 'r' : '' }, c)))),
   h('tbody', null, rows.map(r => h('tr', null, r.map((c, i) => h('td', { class: i ? 'r' : '' }, c))))),
-  foot ? h('tfoot', null, h('tr', null, foot.map((c, i) => h('td', { class: i ? 'r' : '' }, c)))) : null);
+  foot ? h('tfoot', null, h('tr', null, foot.map((c, i) => h('td', { class: i ? 'r' : '' }, c)))) : null));
 const section = (title, ...kids) => h('section', { class: 'tx-sec' }, h('h2', null, title), ...kids);
 const note = (t) => h('p', { class: 'tx-note' }, t);
 
@@ -85,7 +86,7 @@ export function taxReport(t, uta = st.uta[t.year] || null) {
 const PRINT_CSS = `
 body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:#14201f;background:#fff;margin:0;padding:24px;max-width:900px}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 8px;padding-bottom:4px;border-bottom:2px solid #0f766e;color:#0f766e}h3{font-size:13px;margin:12px 0 4px}
-p{margin:4px 0}.tx-note{color:#55666a;font-size:12px}table{border-collapse:collapse;width:100%;margin:6px 0 10px;font-size:13px}
+p{margin:4px 0}.tx-note{color:#55666a;font-size:12px}.tx-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}table{border-collapse:collapse;width:100%;margin:6px 0 10px;font-size:13px}
 th,td{padding:5px 6px;border-bottom:1px solid #e3e8ea;text-align:left;vertical-align:top}th{background:#f1f5f5;font-weight:600}.r{text-align:right;white-space:nowrap}
 tfoot td{font-weight:700;border-top:2px solid #cfd8da}.tx-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:14px 0}
 .tx-kpis div{border:1px solid #e3e8ea;border-radius:8px;padding:8px}.tx-kpis span{display:block;font-size:12px;color:#55666a}.tx-kpis b{font-size:16px}
@@ -128,16 +129,87 @@ export function taxCSV(t) {
   return '﻿' + rows.map(r => r.map(csvCell).join(';')).join('\r\n');
 }
 
-// impresión (PDF): solo el informe, sin la app alrededor
-function printReport(t) {
-  const area = h('div', { id: 'print-area' });
-  area.innerHTML = taxReport(t).outerHTML;
-  area.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
-  document.body.append(area);
-  document.body.classList.add('printing');
-  const done = () => { document.body.classList.remove('printing'); area.remove(); window.removeEventListener('afterprint', done); };
-  window.addEventListener('afterprint', done);
-  setTimeout(() => { window.print(); setTimeout(done, 1500); }, 50);
+// ---- PDF ---------------------------------------------------------------------------------------
+// El iPhone no imprime desde una app agregada a la pantalla de inicio: el PDF se arma aquí (jsPDF, código
+// abierto; se descarga la primera vez que se usa) recorriendo el mismo informe que se ve en pantalla, y se
+// comparte como archivo (Guardar en Archivos, Mail, WhatsApp…).
+const PDF_LIBS = ['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'];
+const loadScript = (src) => new Promise((resolve, reject) => {
+  if ([...document.scripts].some(x => x.src === src && x.dataset.ok)) return resolve();
+  const sc = document.createElement('script');
+  sc.src = src; sc.crossOrigin = 'anonymous';
+  sc.onload = () => { sc.dataset.ok = '1'; resolve(); }; sc.onerror = () => { sc.remove(); reject(new Error('offline')); };
+  document.head.append(sc);
+});
+// las fuentes estándar del PDF solo tienen los caracteres latinos (Latin-1): el resto se reemplaza
+const pdfText = (s) => String(s ?? '').replace(/[—–]/g, '-').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/≈/g, '~').replace(/→/g, '->').replace(/…/g, '...')
+  .replace(/[^\x00-\xFF]/gu, '').replace(/\s+/g, ' ').trim();
+
+export async function taxPDF(t, uta = st.uta[t.year] || null) {
+  if (!(window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API.autoTable)) for (const src of PDF_LIBS) await loadScript(src);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), m = 40;
+  const ink = [20, 32, 31], muted = [85, 102, 106], brand = [15, 118, 110];
+  let y = m;
+  const ensure = (need) => { if (y + need > H - m) { doc.addPage(); y = m; } };
+  const para = (s, { size = 9.5, bold = false, color = ink, indent = 0, gap = 4 } = {}) => {
+    const text = pdfText(s);
+    if (!text) return;
+    doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size); doc.setTextColor(...color);
+    const lines = doc.splitTextToSize(text, W - 2 * m - indent);
+    const lh = size * 1.32;
+    for (const line of lines) { ensure(lh); doc.text(line, m + indent, y + size); y += lh; }
+    y += gap;
+  };
+  const tableOf = (el) => {
+    const rowsOf = (sel) => [...el.querySelectorAll(sel)].map(tr => [...tr.children].map(c => pdfText(c.textContent)));
+    const head = rowsOf('thead tr'), body = rowsOf('tbody tr'), foot = rowsOf('tfoot tr');
+    const cols = (head[0] || body[0] || []).length;
+    const columnStyles = {}; for (let i = 1; i < cols; i++) columnStyles[i] = { halign: 'right' };
+    doc.autoTable({
+      head, body, foot: foot.length ? foot : undefined, startY: y, margin: { left: m, right: m }, theme: 'plain',
+      styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 3, textColor: ink, lineColor: [227, 232, 234], lineWidth: { bottom: 0.5 } },
+      headStyles: { fontStyle: 'bold', textColor: muted, fillColor: [241, 245, 245] }, footStyles: { fontStyle: 'bold' }, columnStyles,
+      didParseCell: (d) => { if (d.column.index > 0) d.cell.styles.halign = 'right'; },     // montos a la derecha también en encabezado y total
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  };
+  const walk = (node) => {
+    for (const el of node.children) {
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'h1') para(el.textContent, { size: 15, bold: true, gap: 2 });
+      else if (tag === 'h2') { ensure(40); y += 6; para(el.textContent, { size: 11.5, bold: true, color: brand, gap: 1 }); doc.setDrawColor(...brand); doc.setLineWidth(1.2); doc.line(m, y, W - m, y); y += 6; }
+      else if (tag === 'h3') { ensure(30); para(el.textContent, { size: 9.5, bold: true, gap: 2 }); }
+      else if (tag === 'summary') para(el.textContent, { size: 9.5, bold: true, gap: 2 });
+      else if (tag === 'table') tableOf(el);
+      else if (tag === 'p') para(el.textContent, el.classList.contains('tx-note') ? { size: 8, color: muted } : { size: 9, color: muted });
+      else if (tag === 'ul') for (const li of el.children) para('- ' + li.textContent, { size: 8.8, indent: 6, gap: 2 });
+      else if (el.classList.contains('tx-kpis')) {
+        const cells = [...el.children].map(d => [pdfText(d.querySelector('span').textContent), pdfText(d.querySelector('b').textContent)]);
+        doc.autoTable({ body: cells, startY: y, margin: { left: m, right: m }, theme: 'grid', styles: { fontSize: 9.5, cellPadding: 5, textColor: ink, lineColor: [227, 232, 234] }, columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } } });
+        y = doc.lastAutoTable.finalY + 10;
+      } else walk(el);     // section, header, footer, details, div
+    }
+  };
+  walk(taxReport(t, uta));
+  const n = doc.getNumberOfPages();
+  for (let i = 1; i <= n; i++) {
+    doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...muted);
+    doc.text(pdfText(`Renta ${t.year} · ${t.person} · Moni`), m, H - 20);
+    doc.text(`Página ${i} de ${n}`, W - m, H - 20, { align: 'right' });
+  }
+  return doc.output('blob');
+}
+
+async function sharePDF(t, btn) {
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Generando PDF…';
+  try {
+    const blob = await taxPDF(t);
+    await shareFile(`renta-${t.year}-resumen.pdf`, blob, 'application/pdf');
+  } catch { toast('No se pudo generar el PDF. La primera vez se necesita conexión para descargar el generador.', { ms: 7000 }); }
+  finally { btn.disabled = false; btn.textContent = label; }
 }
 
 export function renderTax(root, back) {
@@ -154,8 +226,8 @@ export function renderTax(root, back) {
     h('p', { class: 'muted small' }, 'Lo relevante para tu declaración de renta (Formulario 22) de un año: remuneraciones e impuesto retenido, otros ingresos, inversiones, intereses hipotecarios, contribuciones, cuentas y deudas al 31 de diciembre.'),
     h('div', { class: 'filters' }, sel),
     h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', onclick: () => shareFile(`renta-${st.year}-resumen.html`, taxHTML(t), 'text/html') }, 'Compartir con el contador'),
-      h('button', { class: 'btn', onclick: () => printReport(t) }, 'Imprimir / PDF'),
+      h('button', { class: 'btn primary', onclick: (e) => sharePDF(t, e.currentTarget) }, 'PDF para el contador'),
+      h('button', { class: 'btn', onclick: () => shareFile(`renta-${st.year}-resumen.html`, taxHTML(t), 'text/html') }, 'Página web'),
       h('button', { class: 'btn', onclick: async () => { await shareFile(`renta-${st.year}-detalle.csv`, taxCSV(t), 'text/csv'); toast('CSV listo para Excel'); } }, 'CSV (Excel)')),
     h('div', { class: 'card tax-preview' }, taxReport(t)));
 }
