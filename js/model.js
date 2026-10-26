@@ -702,16 +702,18 @@ export function ledger(ym) {
   const s = settings();
   const start = s.settleStart && s.settleStart <= ym ? s.settleStart : ym;
   const ps = people();
-  const carry = {};
+  const carry = {}, prior = [];
   for (const p of ps) carry[p.id] = 0;
   for (let m = start; m < ym; m = addMonths(m, 1)) {
     const st = statement(m);
     for (const p of ps) carry[p.id] += st.net[p.id];
+    // de qué mes viene el saldo anterior (ej. un movimiento cambiado después de pagar ese mes)
+    if (ps.some(p => Math.abs(st.net[p.id]) > 0.5)) prior.push({ ym: m, net: st.net });
   }
   const st = statement(ym);
   const balance = {};
   for (const p of ps) balance[p.id] = carry[p.id] + st.net[p.id];
-  return { ...st, carry, balance, start };
+  return { ...st, carry, prior, balance, start };
 }
 
 // Traduce saldos a una frase: "B debe a A $X" (2 personas) o lista (n).
@@ -1498,7 +1500,31 @@ export const txsByDescription = (fromId, key) => {
 // Mueve esos movimientos a otra categoría, o a una nueva con el mismo reparto que la de origen. Devuelve lo
 // necesario para deshacer. Como las sugerencias al registrar aprenden del historial, los próximos con esa
 // descripción ya proponen la categoría nueva.
-export async function moveByDescription({ fromId, key, toId = null, name = '', icon = '', group = null }) {
+// Si esos movimientos pasan a la categoría `toId` y ella reparte distinto (ej. un % fijo), cuánto cambia lo
+// que le corresponde a cada persona en los meses del cuadre que ya se pagaron: [{ ym, delta: {pid}, ids }].
+export function closedMonthsImpact(txs, toId) {
+  const ps = people(), s = settings(), to = category(toId);
+  if (ps.length < 2 || !to) return [];
+  const closed = new Set(db.all('tx').filter(t => t.kind === 'settle').map(settleMonthOf));
+  const out = new Map();
+  for (const t of txs) {
+    const ym = t.date.slice(0, 7);
+    if (!closed.has(ym) || (s.settleStart && ym < s.settleStart)) continue;
+    const { pct } = splitFor(ym);
+    const a = shares(t, category(t.categoryId), pct, ps), b = shares(t, to, pct, ps);
+    if (!a || !b) continue;
+    const v = txBase(t) * (t.kind === 'in' ? -1 : 1);
+    const d = ps.map(p => [p.id, v * ((b[p.id] || 0) - (a[p.id] || 0))]);
+    if (!d.some(([, x]) => Math.abs(x) >= 0.5)) continue;
+    if (!out.has(ym)) out.set(ym, { ym, delta: {}, ids: [] });
+    const e = out.get(ym);
+    for (const [pid, x] of d) e.delta[pid] = (e.delta[pid] || 0) + x;
+    e.ids.push(t.id);
+  }
+  return [...out.values()].sort((a, b) => a.ym.localeCompare(b.ym));
+}
+// `skipIds`: los que se dejan donde están (ej. los de meses ya pagados)
+export async function moveByDescription({ fromId, key, toId = null, name = '', icon = '', group = null, skipIds = [] }) {
   const from = db.get('categories', fromId);
   let created = false;
   if (!toId) {
@@ -1506,7 +1532,8 @@ export async function moveByDescription({ fromId, key, toId = null, name = '', i
     const c = await db.put('categories', { ...rest, name, icon, group: group ?? from.group ?? '', order: (from.order ?? 0) + 0.5 });
     toId = c.id; created = true;
   }
-  const moved = txsByDescription(fromId, key);
+  const skip = new Set(skipIds);
+  const moved = txsByDescription(fromId, key).filter(t => !skip.has(t.id));
   if (moved.length) await db.putMany('tx', moved.map(t => ({ ...t, categoryId: toId })));
   return { fromId, toId, created, movedIds: moved.map(t => t.id) };
 }

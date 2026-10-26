@@ -71,6 +71,13 @@ export async function ownCategory(sg, onDone) {
     if (onDone) onDone(r);
   };
   if (sg.existing) {
+    // la otra categoría puede repartir distinto: no se cambian sin aviso los cierres que ya se pagaron
+    const impact = M.closedMonthsImpact(M.txsByDescription(sg.catId, sg.key), sg.existing.id);
+    if (impact.length) {
+      const choice = await movePaidChoice(sg, from, n, impact);
+      if (!choice) return;
+      return done(await M.moveByDescription({ fromId: from.id, key: sg.key, toId: sg.existing.id, skipIds: choice === 'skip' ? impact.flatMap(e => e.ids) : [] }), sg.existing.name);
+    }
     if (!await confirmDialog(`¿Mover los ${M.fmtInt(n)} movimientos "${sg.label}" de ${from.name} a ${sg.existing.name}? Conservan su reparto y quién pagó.`, { ok: 'Mover', danger: false })) return;
     return done(await M.moveByDescription({ fromId: from.id, key: sg.key, toId: sg.existing.id }), sg.existing.name);
   }
@@ -91,6 +98,30 @@ export async function ownCategory(sg, onDone) {
       if (dup) { toast(`Ya existe "${dup.name}"`); return false; }
       await done(await M.moveByDescription({ fromId: from.id, key: sg.key, name: v.name, icon: v.icon, group: v.group }), v.name);
     },
+  });
+}
+
+// Mover a una categoría que reparte distinto cambia lo que ya se pagó: se elige entre moverlos todos (y el
+// próximo cierre arrastra la diferencia) o dejar en su categoría los de meses pagados. Devuelve 'all', 'skip' o null.
+function movePaidChoice(sg, from, n, impact) {
+  const base = M.base();
+  const total = {};
+  for (const e of impact) for (const [pid, v] of Object.entries(e.delta)) total[pid] = (total[pid] || 0) + v;
+  const who = M.people().filter(p => total[p.id] >= 0.5).map(p => `${p.name} quedaría debiendo ${M.fmt(total[p.id], base)} más`).join(' y ') || 'cambia el saldo';
+  const months = impact.map(e => M.monthName(e.ym)).join(', ');
+  const paid = impact.reduce((a, e) => a + e.ids.length, 0);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; m.close(); resolve(v); };
+    const m = modal('Cambia un cierre ya pagado', h('div', null,
+      h('p', null, `${sg.existing.name} reparte distinto que ${from.name}. ${paid === n ? (n === 1 ? 'El movimiento' : `Los ${M.fmtInt(n)} movimientos`) : `${M.fmtInt(paid)} de los ${M.fmtInt(n)} movimientos`} "${sg.label}" ${paid === 1 ? 'es de un mes que ya se pagó' : 'son de meses que ya se pagaron'} (${months}): si se mueven, ${who}, y el próximo cierre lo cobra como saldo anterior.`)), {
+      actions: [
+        h('button', { class: 'btn', onclick: () => finish(null) }, 'Cancelar'),
+        h('button', { class: 'btn', onclick: () => finish('all') }, 'Mover todos'),
+        h('button', { class: 'btn primary', onclick: () => finish('skip') }, 'No tocar lo pagado'),
+      ],
+      onClose: () => finish(null),
+    });
   });
 }
 

@@ -339,6 +339,7 @@ select:disabled { opacity: .65; }
 .recon-grid > span:nth-child(3n+1) { color: var(--muted); font-size: 14px; }
 .recon-grid b { font-variant-numeric: tabular-nums; text-align: right; }
 .recon-grid .link { padding: 0; font-size: 14px; }
+.carry .link { display: block; padding: 6px 0 0; font-size: 13px; text-align: left; }
 .recon-explain { margin: 4px 0 0; }
 .recon-sum { display: grid; gap: 4px; }
 .recon-verdict { font-weight: 600; }
