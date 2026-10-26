@@ -114,12 +114,13 @@ export function renderClose(root) {
       h('div', { class: 'label' }, 'A pagar este cierre'),
       result,
       Object.values(led.carry).some(v => Math.abs(v) > 0.5)
-        ? h('div', { class: 'muted small carry' }, `Incluye saldo anterior (desde ${M.monthName(led.start)}): ${M.settleSummary(led.carry).map(t => `${M.personName(t.from)} debe ${M.fmt(t.amount, base)} a ${M.personName(t.to)}`).join(', ')}. Viene de:`,
+        ? h('div', { class: 'muted small carry' }, `${tr.length ? 'Incluye saldo anterior' : 'Los pagos cubrieron el saldo anterior'} (desde ${M.monthName(led.start)}): ${M.settleSummary(led.carry).map(t => `${M.personName(t.from)} ${tr.length ? 'debe' : 'debía'} ${M.fmt(t.amount, base)} a ${M.personName(t.to)}`).join(', ')}. Viene de:`,
           led.prior.map(e => h('button', { class: 'link', onclick: () => { st.ym = e.ym; renderClose(root); } },
             `${M.monthName(e.ym)}: ${M.settleSummary(e.net).map(t => `${M.personName(t.from)} debe ${M.fmt(t.amount, base)}`).join(', ')} ›`))) : null,
-      // un mes ya pagado que quedó con saldo: algo se cambió después del pago
-      led.settlements.length && ppl.some(p => Math.abs(led.net[p.id]) > 0.5)
-        ? h('div', { class: 'muted small' }, `Después del pago quedó una diferencia (${M.settleSummary(led.net).map(t => `${M.personName(t.from)} debe ${M.fmt(t.amount, base)}`).join(', ')}): algún movimiento de este mes se agregó o cambió después de pagarlo. Pasa al cierre siguiente como saldo anterior.`) : null,
+      // un mes ya pagado que quedó con saldo: algo se cambió después del pago (si el pago cubrió el saldo
+      // anterior, el mes por sí solo no da cero pero el acumulado sí: no hay nada que avisar)
+      led.settlements.length && tr.length
+        ? h('div', { class: 'muted small' }, 'Después del pago quedó saldo: algún movimiento se agregó o cambió después de pagar. No hace falta pagarlo aparte: pasa al cierre siguiente como saldo anterior.') : null,
       h('div', { class: 'actions' },
         tr.length ? h('button', { class: 'btn primary', onclick: () => openTxForm(null, { kind: 'settle', paidBy: tr[0].from, to: tr[0].to, amount: String(Math.round(tr[0].amount)), settleMonth: ym, date: M.todayStr(), currency: base, accountId: null }) }, 'Registrar pago') : null,
         h('button', { class: 'btn', onclick: async () => {
