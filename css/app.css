@@ -556,3 +556,5 @@ details summary { cursor: pointer; font-weight: 600; margin: 6px 0; }
 .fc-field input, .fc-field select { font-size: 16px; }
 .sched-done { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .chips a.chip { display: inline-flex; align-items: center; color: inherit; text-decoration: none; }
+.calc-hint { display: block; font-size: 13px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 0; }
+.calc-hint.bad { color: var(--neg); }

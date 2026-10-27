@@ -64,8 +64,14 @@ async function getDb() {
   return idb;
 }
 
-export async function open() {
-  if (ready) return;
+// Se abre una sola vez: quien la pida mientras se está cargando espera la misma carga (dos cargas a la vez
+// podían volver a poner en memoria lo que otra parte ya había cambiado).
+let opening = null;
+export function open() {
+  if (!opening) opening = load();
+  return opening;
+}
+async function load() {
   if (typeof indexedDB === 'undefined') { ready = true; return; } // modo memoria (tests)
   useIdb = true;
   const d = await getDb();

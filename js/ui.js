@@ -1,5 +1,5 @@
 // Helpers de interfaz: creación de nodos, modales, formularios, avisos.
-import { parseAmount } from './model.js';
+import { parseAmount, evalAmount, isAmountExpression } from './model.js';
 
 export function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -34,6 +34,35 @@ export function groupDigits(str) {
 }
 // número guardado → texto para un campo: 1478100.8 → "1.478.100,8"
 export const numText = (n) => (n == null || n === '' || Number.isNaN(n) ? '' : groupDigits(String(n).replace('.', ',')));
+
+// Teclas de operaciones bajo un campo de monto: el teclado numérico del iPhone no tiene + − × ÷.
+// Aparecen mientras se escribe en el campo, sin cerrar el teclado; = deja el resultado.
+const CALC_KEYS = [['+', '+', 'Sumar'], ['−', '-', 'Restar'], ['×', '×', 'Multiplicar'], ['÷', '÷', 'Dividir'], ['(', '(', 'Abrir paréntesis'],
+  [')', ')', 'Cerrar paréntesis'], ['=', '=', 'Calcular']];
+export function calcKeys(input) {
+  const keep = (e) => e.preventDefault();          // tocar una tecla no saca el foco del campo
+  const press = (key) => {
+    const v = input.value;
+    if (key === '=') {
+      const r = evalAmount(v);
+      if (Number.isFinite(r)) input.value = numText(r);
+    } else {
+      const a = input.selectionStart ?? v.length, b = input.selectionEnd ?? a;
+      input.value = v.slice(0, a) + key + v.slice(b);
+      input.setSelectionRange(a + key.length, a + key.length);
+    }
+    input.focus();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const bar = h('div', { class: 'calc-keys', hidden: true }, CALC_KEYS.map(([label, key, name]) => h('button', {
+    type: 'button', class: 'chip small calc-key' + (key === '=' ? ' eq' : ''), 'aria-label': name,
+    onpointerdown: keep, onmousedown: keep, onclick: () => press(key),
+  }, label)));
+  let hide = 0;
+  input.addEventListener('focus', () => { clearTimeout(hide); bar.hidden = false; });
+  input.addEventListener('blur', () => { hide = setTimeout(() => { bar.hidden = true; }, 250); });
+  return bar;
+}
 
 if (typeof document !== 'undefined') {
   // en captura: se reformatea antes de que el campo lo lea, manteniendo el cursor en su lugar
@@ -175,8 +204,18 @@ export function formModal({ title, fields, value = {}, onSave, onDelete, saveLab
         inputmode: f.type === 'number' ? 'decimal' : null, list: f.list || null, autocapitalize: f.type === 'text' ? 'sentences' : null,
         autocomplete: 'off',
       });
-      get = () => (f.type === 'number' ? (inp.value.trim() === '' ? null : parseNum(inp.value)) : inp.value.trim());
+      get = () => (f.type === 'number' ? (inp.value.trim() === '' ? null : f.calc ? evalAmount(inp.value) : parseNum(inp.value)) : inp.value.trim());
       input = inp;
+      if (f.calc) {
+        // acepta operaciones (con sus teclas) y muestra el resultado
+        const res = h('small', { class: 'calc-hint' });
+        inp.addEventListener('input', () => {
+          const r = evalAmount(inp.value);
+          res.textContent = isAmountExpression(inp.value) ? (Number.isFinite(r) ? `= ${numText(r)}` : 'Revisa la operación') : '';
+          res.classList.toggle('bad', isAmountExpression(inp.value) && !Number.isFinite(r));
+        });
+        input = h('div', null, inp, calcKeys(inp), res);
+      }
       if (f.signed) {
         // el teclado decimal del iPhone no tiene signo menos: botón ± para cambiarlo
         const flip = h('button', { type: 'button', class: 'btn sign', 'aria-label': 'Cambiar signo', onclick: () => {
