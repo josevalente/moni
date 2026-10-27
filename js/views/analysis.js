@@ -65,7 +65,12 @@ export function forecastCard(onScenario) {
   const c = (v) => compactMoney(v, base);
   // por defecto la que ya tiene arriendo; si no, la más antigua (la que se suele arrendar al mudarse)
   const since = (p) => { const d = p.mortgageId && db.get('debts', p.mortgageId); return (d && d.mortgage && d.mortgage.from) || '9999'; };
-  const props = M.propertySummaries().sort((a, b) => (b.rentUF ? 1 : 0) - (a.rentUF ? 1 : 0) || since(a).localeCompare(since(b)));
+  // una propiedad que ya se arrienda (con arriendo registrado o programado, por su etiqueta) no se simula: la
+  // proyección ya usa lo real. Si ese arriendo no tiene etiqueta no se sabe de cuál es: no se simula ninguna.
+  const real = M.realRentTags();
+  const props = M.propertySummaries().filter(p => !real.any || (!real.untagged && !(p.tag && real.tags.has(p.tag))))
+    .sort((a, b) => (b.rentUF ? 1 : 0) - (a.rentUF ? 1 : 0) || since(a).localeCompare(since(b)));
+  if (!props.length || (fcView.propId && !props.some(p => p.id === fcView.propId))) { fcView.rent = false; fcView.propId = null; }
   const propOf = () => props.find(p => p.id === fcView.propId) || props[0];
   if (!fcView.from) fcView.from = M.addMonths(M.curYm(), 3);
   // arriendo de partida: el anotado en la propiedad o ~0,4% mensual de su valor, en UF
@@ -103,7 +108,9 @@ export function forecastCard(onScenario) {
           if (!i) return [{ value: M.fmt(f.liquid, base), label: 'Liquidez de hoy' }];
           const r = f.rows[i - 1];
           return [{ value: M.fmt(r.income, base), label: (r.partial ? 'Ingresos que faltan' : 'Ingresos') + (r.lump ? ' (incl. el ingreso anual de este mes)' : '') }, { value: M.fmt(-r.spend, base), label: r.partial ? 'Gasto que falta' : 'Gasto' },
-            r.div ? { value: M.fmt(-r.div, base), label: 'Dividendos' } : null, r.rent ? { value: M.fmt(r.rent, base), label: 'Arriendo neto' } : null,
+            r.div ? { value: M.fmt(-r.div, base), label: 'Dividendos' } : null, r.rent ? { value: M.fmt(r.rent, base), label: 'Arriendo neto (simulado)' } : null,
+            r.rentReal ? { value: M.fmt(r.rentReal, base), label: 'Arriendo (el que recibes)' } : null,
+            r.schedNet ? { value: M.fmt(r.schedNet, base, { sign: true }), label: `Programados (${r.sched.length})` } : null,
             { value: M.fmt(r.net, base, { sign: true }), label: 'Neto del mes' }].filter(Boolean);
         },
         ariaLabel: `Caja proyectada: ${msg}`,
@@ -115,11 +122,13 @@ export function forecastCard(onScenario) {
       h('h4', null, `Un mes típico (${monthLow(typ.ym)})`),
       h('div', { class: 'rent' },
         line('Ingreso líquido', typ.income),
-        typ.rent ? line('Arriendo neto', typ.rent) : null,
+        typ.rentReal ? line('Arriendo (el que recibes)', typ.rentReal) : null,
+        typ.rent ? line('Arriendo neto (simulado)', typ.rent) : null,
+        (typ.sched || []).map(x => line(`🔁 ${x.name}`, x.amount)),
         line(fcView.spend != null ? 'Tu gasto (ajustado)' : 'Tu gasto (tu parte, promedio de 12 meses)', -typ.spend),
         typ.dividends.map(d => line(`${d.name}${d.share < 1 ? ` (tu parte, ${pct(d.share)})` : ''}`, -d.amount)),
         line('Resultado del mes', typ.net, true))));
-    fill(tableBox, dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Neto', 'Caja'], f.rows.map(r => [r.partial ? `Resto de ${monthLow(r.ym)}` : M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent, base), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])));
+    fill(tableBox, dataTable(['Mes', 'Ingresos', 'Gasto', 'Dividendos', 'Arriendo', 'Programados', 'Neto', 'Caja'], f.rows.map(r => [r.partial ? `Resto de ${monthLow(r.ym)}` : M.monthName(r.ym), M.fmt(r.income, base), M.fmt(r.spend, base), M.fmt(r.div, base), M.fmt(r.rent + r.rentReal, base), M.fmt(r.schedNet, base, { sign: true }), M.fmt(r.net, base, { sign: true }), M.fmt(r.balance, base)])));
     return f;
   };
   const changed = () => { draw(); if (onScenario) onScenario(); };
@@ -137,6 +146,7 @@ export function forecastCard(onScenario) {
   const spendBox = h('label', { class: 'fc-field fc-spend' }, h('span', null, 'Tu gasto al mes (para simular)'), spendIn, spendHint);
   // controles del escenario (se crean una sola vez)
   let scen = null;
+  if (real.any && !props.length) scen = h('p', { class: 'muted small' }, 'Arriendo: la proyección usa el que ya recibes (registrado o programado), así que no hace falta simularlo.');
   if (props.length) {
     const ufIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Arriendo en UF' });
     const admIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Comisión en %' });
@@ -171,7 +181,7 @@ export function forecastCard(onScenario) {
     subtitle: 'Tus cuentas: ingresos y gastos típicos, dividendos exactos de cada crédito',
     chart: h('div', null, live, scen, spendBox),
     table: tableBox,
-    footnote: `Parte con tu liquidez de hoy (${c(f.liquid)}: cuentas menos tarjetas). Ingresos: ${c(f.incomeBase)} líquidos al mes${f.deductions ? ` (ya sin ${c(f.deductions)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${c(v)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${c(f.spendBase)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Gastos compartidos: cuenta tu parte (lo que pagas tú menos lo que le toca a la otra persona, más tu parte de lo que paga ella), que es lo que sale de tu cuenta con el cierre mensual. Este mes cuenta solo lo que falta. Es una estimación: no incluye compras grandes ni ingresos nuevos.`,
+    footnote: `Parte con tu liquidez de hoy (${c(f.liquid)}: cuentas menos tarjetas). Ingresos: ${c(f.incomeBase)} líquidos al mes${f.deductions ? ` (ya sin ${c(f.deductions)} de descuentos del sueldo)` : ''}${f.lumps.length ? ` más ${f.lumps.map(([mo, v]) => `${c(v)} en ${M.monthName(`2000-${mo}`).split(' ')[0].toLowerCase()}`).join(', ')} como el año pasado` : ''}. Gasto: tu parte promedio de 12 meses (${c(f.spendBase)}), subiendo con la inflación (${pct(f.inflation, 1)} anual). Gastos compartidos: cuenta tu parte (lo que pagas tú menos lo que le toca a la otra persona, más tu parte de lo que paga ella), que es lo que sale de tu cuenta con el cierre mensual. Este mes cuenta solo lo que falta. ${f.rentReceived.length ? ` Arriendo: el que ya recibes (${f.rentReceived.map(x => `${x.name}, ${c(x.monthly)} al mes`).join('; ')}), desde el primer mes.` : ''}${f.scheduled ? ' Programados (Más › Programados): cada uno en su fecha y en tu parte; su categoría sale de los promedios para no contarlo dos veces.' : ''} Es una estimación: no incluye compras grandes ni ingresos nuevos que no estén programados.`,
   });
 }
 

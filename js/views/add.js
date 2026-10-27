@@ -100,6 +100,7 @@ export function openTxForm(existing, defaults = {}) {
     kind: 'out', date: today, amount: '', currency: null, accountId: null, toAccountId: null,
     categoryId: null, desc: '', paidBy: me, alloc: null, allocTouched: false, allocManual: false, fx: null, fxTouched: false,
     tag: '', to: null, settleMonth: null, toAmount: '', accTouched: false, open: null, lastAmount: lastAmountDefault || null,
+    repeat: null,   // { every, day, end, uf }: también queda programado
     ...rest,
   };
   if (isEdit) {
@@ -225,6 +226,26 @@ export function openTxForm(existing, defaults = {}) {
   const lastAmtBox = h('span');
   const dateIn = h('input', { type: 'date', value: s.date, 'aria-label': 'Fecha' });
   const tagIn = h('input', { type: 'text', placeholder: 'Ej: Viaje sur', value: s.tag, list: 'taglist', 'aria-label': 'Etiqueta' });
+  // repetir: día del mes, hasta cuándo y, si se quiere, el monto fijado en UF
+  const repDayIn = h('input', { type: 'text', inputmode: 'numeric', 'aria-label': 'Día del mes', placeholder: 'día' });
+  const repEndIn = h('input', { type: 'month', 'aria-label': 'Hasta (opcional)' });
+  const repUfIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Monto en UF', placeholder: 'UF' });
+  const repUfHint = h('small', { class: 'muted' });
+  repDayIn.addEventListener('input', () => { const d = Math.round(Number(repDayIn.value)); if (s.repeat && d >= 1 && d <= 31) { s.repeat.day = d; updateSummaryLabels(); } });
+  repEndIn.addEventListener('change', () => { if (s.repeat) s.repeat.end = repEndIn.value || ''; });
+  // el monto en pesos sale de la UF del día (y se actualiza al escribir las UF)
+  const ufToAmount = () => {
+    if (!s.repeat) return;
+    const ufv = M.parseAmount(repUfIn.value);
+    s.repeat.uf = Number.isFinite(ufv) && ufv > 0 ? ufv : null;
+    const v = s.repeat.uf && M.rateFor('UF', s.date) ? M.scheduleAmount({ uf: s.repeat.uf, amount: 0, currency: s.currency }, s.date) : null;
+    if (v) { s.amount = numText(v); amountIn.value = s.amount; updateEval(); updateFx(); }
+    repUfHint.textContent = !s.repeat.uf ? '' : v
+      ? `Con la UF del ${new Date(s.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}: ${M.fmt(v, s.currency)}. Cada vez se calcula con la UF de ese día.`
+      : 'Sin valor de la UF guardado: actualízalo en Más › Monedas.';
+    updateSummaryLabels();
+  };
+  repUfIn.addEventListener('input', ufToAmount);
 
   // ---- sugerencias por descripción
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
@@ -474,14 +495,21 @@ export function openTxForm(existing, defaults = {}) {
     return 'Compartido ' + people.map(p => Math.round((pct[p.id] || 0) * 100)).join('/');
   }
   const allocLabel = () => (s.alloc === 'shared' ? splitLabel() : `Solo de ${M.personName(s.alloc === 'payer' || !s.alloc ? s.paidBy : s.alloc)}`);
+  const repeatLabel = () => (s.repeat ? `${M.everyLabel(s.repeat.every)}, día ${s.repeat.day}${s.repeat.uf ? ` · ${numText(s.repeat.uf)} UF` : ''}` : 'Repetir');
+  const canRepeat = () => !isEdit && !s.scheduleId && (s.kind === 'out' || s.kind === 'in');
+  // con fecha futura no se registra todavía: queda programado
+  let futureNote = null;
   const sumChips = {};
   function updateSummaryLabels() {
     if (sumChips.date) sumChips.date.lastChild.textContent = dateLabel();
     if (sumChips.alloc) sumChips.alloc.lastChild.textContent = allocLabel();
+    if (sumChips.repeat) sumChips.repeat.lastChild.textContent = repeatLabel();
+    if (futureNote) futureNote.hidden = !(canRepeat() && s.date > today);
   }
   dateIn.addEventListener('change', () => {
     s.date = dateIn.value || today;
     s.fxTouched = false;
+    if (s.repeat && s.repeat.uf) ufToAmount();        // en UF: el monto es el de la UF de esa fecha
     updateFx(); updateSummaryLabels();
     if (toAmtInput) toAmtInput.placeholder = toAmtHint();
   });
@@ -579,7 +607,11 @@ export function openTxForm(existing, defaults = {}) {
         sum('date', '📅', dateLabel()),
         many ? sum('payer', '👤', `${s.kind === 'in' ? 'Recibió' : 'Pagó'} ${M.personName(s.paidBy)}`) : null,
         many ? sum('alloc', '👥', allocLabel()) : null,
-        sum('tag', '#', s.tag ? '#' + s.tag : 'Etiqueta')));
+        sum('tag', '#', s.tag ? '#' + s.tag : 'Etiqueta'),
+        canRepeat() ? sum('repeat', '🔁', repeatLabel()) : null));
+      futureNote = canRepeat() ? h('div', { class: 'sched-note', hidden: !(s.date > today) },
+        '📅 Fecha futura: queda programado. Ese día aparece en Pendientes para confirmarlo y la proyección de caja ya lo cuenta.') : null;
+      parts.push(futureNote);
       // un gasto personal en una categoría que se comparte: suele ser un descuido (no entra en el cierre)
       if (many && cat && s.kind === 'out' && allocToState(cat.defaultAlloc) === 'shared' && s.alloc !== 'shared') {
         parts.push(h('div', { class: 'alloc-note' },
@@ -602,6 +634,23 @@ export function openTxForm(existing, defaults = {}) {
           s.alloc === 'shared' ? h('small', { class: 'muted' }, `${splitLabel().replace('Compartido ', '')} (${catMode})`) : null));
       } else if (s.open === 'tag') {
         parts.push(h('div', { class: 'sum-editor' }, tagIn));
+      } else if (s.open === 'repeat' && canRepeat()) {
+        const pick = (v) => {
+          const n = Number(v);
+          s.repeat = n ? { day: Number(s.date.slice(8)), end: '', uf: null, ...(s.repeat || {}), every: n } : null;
+          render();
+        };
+        const opts = [{ v: '0', l: 'No' }, ...M.EVERY.filter(e => e[0]).map(e => ({ v: String(e[0]), l: e[1].replace('Cada ', '') }))];
+        if (s.repeat) { repDayIn.value = String(s.repeat.day); repEndIn.value = s.repeat.end || ''; }
+        const ufOk = s.currency !== 'UF' && M.settings().currencies.some(c => c.code === 'UF');
+        parts.push(h('div', { class: 'sum-editor' },
+          seg(opts, String(s.repeat ? s.repeat.every : 0), pick, 'Repetir cada'),
+          s.repeat ? h('div', { class: 'rep-fields' },
+            h('label', { class: 'fc-field' }, h('span', null, 'Día del mes'), repDayIn),
+            h('label', { class: 'fc-field' }, h('span', null, 'Hasta (opcional)'), repEndIn),
+            ufOk ? h('label', { class: 'fc-field' }, h('span', null, 'Fijo en UF (opcional)'), repUfIn) : null) : null,
+          s.repeat && ufOk ? repUfHint : null,
+          s.repeat ? h('small', { class: 'muted' }, `Desde ${M.monthName(s.date.slice(0, 7)).toLowerCase()}: el día ${s.repeat.day} aparece en Pendientes para confirmarlo (con este monto o ajustándolo) y la proyección de caja ya lo cuenta.`) : null));
       }
     } else {
       // transferencias y pagos entre ustedes: formato clásico
@@ -689,14 +738,33 @@ export function openTxForm(existing, defaults = {}) {
       if (!ownerInvolved()) tx.accountId = null;
     }
     if (!tx.tag) delete tx.tag;
+    // desde un programado (Pendientes): queda confirmado ese mes
+    if (!isEdit && s.scheduleId) { tx.scheduleId = s.scheduleId; tx.scheduleMonth = s.scheduleMonth; }
     const before = isEdit ? { ...existing } : null;
-    await db.put('tx', tx);
-    toast(isEdit ? 'Cambios guardados' : 'Movimiento guardado', {
-      label: 'Deshacer', onAction: async () => { if (isEdit) await db.put('tx', before); else await db.del('tx', tx.id); },
-    });
+    const future = canRepeat() && s.date > today;
+    const rep = canRepeat() && s.repeat && s.repeat.every ? s.repeat : null;
+    if (future || rep) {
+      // programado: con fecha futura solo se programa; si es de hoy (o antes), se registra y se repite
+      const sc = {
+        id: db.uid(), desc: tx.desc, kind: tx.kind, amount: tx.amount, currency: tx.currency, accountId: tx.accountId, categoryId: tx.categoryId,
+        alloc: tx.alloc, paidBy: tx.paidBy, ...(tx.tag ? { tag: tx.tag } : {}), ...(rep && rep.uf ? { uf: rep.uf } : {}),
+        day: rep ? rep.day : Number(s.date.slice(8)), every: rep ? rep.every : 0, start: s.date.slice(0, 7), end: (rep && rep.end) || null, skipped: [],
+      };
+      await db.put('schedules', sc);
+      if (!future) { tx.scheduleId = sc.id; tx.scheduleMonth = sc.start; await db.put('tx', tx); }
+      const when = new Date(M.scheduleDate(sc, sc.start) + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+      toast(future ? `Programado para el ${when}: ese día aparece en Pendientes` : `Guardado y programado: ${M.everyLabel(sc.every).toLowerCase()}, día ${sc.day}`, {
+        label: 'Deshacer', ms: 6000, onAction: async () => { await db.del('schedules', sc.id); if (!future) await db.del('tx', tx.id); },
+      });
+    } else {
+      await db.put('tx', tx);
+      toast(isEdit ? 'Cambios guardados' : 'Movimiento guardado', {
+        label: 'Deshacer', onAction: async () => { if (isEdit) await db.put('tx', before); else await db.del('tx', tx.id); },
+      });
+    }
     if (again && !isEdit) {
       // otro del mismo ticket: se conservan categoría, cuenta, fecha, pagador y reparto
-      s.amount = ''; s.desc = ''; s.lastAmount = null; amountIn.value = ''; descIn.value = ''; s.fxTouched = false; s.open = null;
+      s.amount = ''; s.desc = ''; s.lastAmount = null; amountIn.value = ''; descIn.value = ''; s.fxTouched = false; s.open = null; s.repeat = null; repUfIn.value = '';
       render();
       ((s.kind === 'out' || s.kind === 'in') ? descIn : amountIn).focus();
     } else m.close();
@@ -704,7 +772,7 @@ export function openTxForm(existing, defaults = {}) {
 
   const dup = isEdit ? h('button', { class: 'btn ghost', onclick: () => {
     m.close();
-    const { id, createdAt, updatedAt, ref, ...rest2 } = existing;
+    const { id, createdAt, updatedAt, ref, scheduleId, scheduleMonth, ...rest2 } = existing;
     openTxForm(null, { ...rest2, date: M.todayStr(), amount: numText(rest2.amount), toAmount: rest2.toAmount != null ? numText(rest2.toAmount) : '', alloc: rest2.alloc ?? 'none' });
   } }, 'Duplicar') : null;
   const delBtn = isEdit ? h('button', { class: 'btn danger ghost', onclick: async () => {

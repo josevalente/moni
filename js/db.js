@@ -10,11 +10,11 @@
 
 export const STORES = [
   'tx', 'accounts', 'categories', 'people', 'settings', 'splits',
-  'investments', 'invEntries', 'debts', 'debtEntries', 'rates',
+  'investments', 'invEntries', 'debts', 'debtEntries', 'rates', 'schedules',
 ];
 
 const DB_NAME = 'moni';
-const DB_VERSION = 1;
+const DB_VERSION = 2;   // 2: programados
 let idb = null;
 let useIdb = false;
 const mem = {};

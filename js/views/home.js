@@ -13,6 +13,7 @@ import { openAccount } from './account.js';
 import { paceCard, netWorthTrend, openNetWorth } from './insights.js';
 import { sparkline } from '../charts.js';
 import { unusualCard, forecastAlert } from './analysis.js';
+import { registerOccurrences, openOccurrence, skipOccurrenceDialog, occurrenceTitle } from './schedules.js';
 
 const st = { mode: 'total', ym: null, laterOpen: false, zeroOpen: false, fixedOpen: false };
 // Cuentas en Inicio: plegada por defecto; se recuerda en este teléfono
@@ -30,8 +31,9 @@ export const pendingNow = () => {
   if (Drive.dueToday()) r.items = [...r.items.filter(i => i.type !== 'backup'), { type: 'drive', key: 'drive' }];   // la copia en Drive es el respaldo
   return r;
 };
-// cuentas fijas vencidas: ya pasó su día habitual de este mes y no están registradas (lo que va en el ícono)
-const isOverdue = (i) => i.type === 'bill' && i.day < Number(M.todayStr().slice(8));
+// cuentas fijas vencidas: ya pasó su día habitual de este mes y no están registradas (lo que va en el ícono);
+// también un programado cuya fecha ya pasó sin confirmarlo
+const isOverdue = (i) => (i.type === 'bill' && i.day < Number(M.todayStr().slice(8))) || (i.type === 'sched' && i.date < M.todayStr());
 export const overdueBills = () => pendingNow().items.filter(isOverdue);
 const usableAcc = (id) => { const a = id && M.account(id); return a && !a.archived ? id : null; };
 const ago = (days) => (days === Infinity ? null : days >= 60 ? `hace ${Math.round(days / 30)} meses` : `hace ${days} días`);
@@ -108,7 +110,17 @@ function skipBill(b, ref) {
 function pendingRow(i, ref, root) {
   const base = M.base();
   let icon, title, sub, action;
-  if (i.type === 'bill') {
+  if (i.type === 'sched') {
+    const cat = M.category(i.s.categoryId);
+    const amt = M.scheduleAmount(i.s, i.date);
+    icon = (cat && cat.icon) || (i.s.kind === 'in' ? '💰' : '🔁');
+    title = occurrenceTitle(i);
+    const when = new Date(i.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+    sub = `${isOverdue(i) ? `⚠️ era el ${when}` : i.due ? 'hoy' : `el ${when}`} · ${i.s.kind === 'in' ? 'ingreso ' : ''}${M.fmt(amt, i.s.currency)}${i.s.uf ? ` (${new Intl.NumberFormat('es-CL').format(i.s.uf)} UF)` : ''}`;
+    action = [
+      h('button', { class: 'btn small', onclick: () => registerOccurrences([i]) }, 'Registrar'),
+      h('button', { class: 'btn small ghost', 'aria-label': `Ajustar antes de registrar: ${title}`, onclick: () => openOccurrence(i) }, 'Ajustar')];
+  } else if (i.type === 'bill') {
     icon = i.cat.icon || '🧾';
     title = i.cat.name;
     sub = `${isOverdue(i) ? `⚠️ venció ~día ${i.day}` : `~día ${i.day}`} · ${i.fixed ? '' : 'último '}${M.fmt(i.template.amount, i.template.currency)}`;
@@ -168,6 +180,7 @@ function pendingRow(i, ref, root) {
     h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub)),
     h('div', { class: 'row-actions' }, action,
       i.type === 'bill' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir ${i.cat.name}`, onclick: () => skipBill(i, ref) }, '✕') : null,
+      i.type === 'sched' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir o editar: ${title}`, onclick: () => skipOccurrenceDialog(i) }, '✕') : null,
       ['summary', 'split', 'unused'].includes(i.type) ? h('button', { class: 'icon-btn small', 'aria-label': `Ocultar este mes: ${title}`, onclick: async () => { await M.skipPending(i.type, ref); toast('Oculto este mes'); } }, '✕') : null,
       i.type === 'recon' ? h('button', { class: 'icon-btn small', 'aria-label': `Omitir este mes: cuadrar ${i.acc.name}`, onclick: async () => {
         await M.skipPending('recon:' + i.acc.id, ref);
@@ -181,12 +194,16 @@ function pendingCard(root) {
   if (!items.length) return null;
   const day = Number(M.todayStr().slice(8));
   // cuentas fijas que vencen en los próximos 5 días (o ya pasaron); el resto, plegado
-  const soon = items.filter(i => i.type !== 'bill' || i.day <= day + 5);
-  const later = items.filter(i => i.type === 'bill' && i.day > day + 5);
+  // programados: los de hoy o antes, a la vista; los que vienen este mes, plegados
+  const isLater = (i) => (i.type === 'bill' && i.day > day + 5) || (i.type === 'sched' && !i.due);
+  const soon = items.filter(i => !isLater(i));
+  const later = items.filter(isLater);
+  const schedDue = soon.filter(i => i.type === 'sched');
+  const schedGrouped = schedDue.length >= 2;
   // las fijas que vencen se agrupan en una fila con "Registrar todas"
   const fixedSoon = soon.filter(i => i.type === 'bill' && i.fixed);
   const grouped = fixedSoon.length >= 2;
-  const rest = soon.filter(i => !(grouped && i.type === 'bill' && i.fixed));
+  const rest = soon.filter(i => !(grouped && i.type === 'bill' && i.fixed) && !(schedGrouped && i.type === 'sched'));
   const fixedTotal = fixedSoon.reduce((a, b) => a + M.txBase(b.template), 0);
   const names = fixedSoon.map(b => b.cat.name);
   const canBadge = 'setAppBadge' in navigator && typeof Notification !== 'undefined' && Notification.permission === 'default';
@@ -204,9 +221,17 @@ function pendingCard(root) {
       h('div', { class: 'row-actions' }, h('button', { class: 'btn small primary', onclick: () => registerMany(fixedSoon) }, 'Registrar todas'))) : null,
     grouped ? h('button', { class: 'link-row small', onclick: () => { st.fixedOpen = !st.fixedOpen; renderHome(root); } }, st.fixedOpen ? 'Ocultar el detalle' : 'Ver una por una') : null,
     grouped && st.fixedOpen ? fixedSoon.map(i => pendingRow(i, ref, root)) : null,
+    schedGrouped ? h('div', { class: 'row static pend-row pend-group' },
+      h('div', { class: 'icon', 'aria-hidden': 'true' }, '🔁'),
+      h('div', { class: 'main' },
+        h('div', { class: 'title' }, `${schedDue.length} programados para confirmar`),
+        h('div', { class: 'sub' }, `${schedDue.slice(0, 3).map(occurrenceTitle).join(', ')}${schedDue.length > 3 ? ` y ${schedDue.length - 3} más` : ''}`)),
+      h('div', { class: 'row-actions' }, h('button', { class: 'btn small primary', onclick: () => registerOccurrences(schedDue) }, 'Registrar todos'))) : null,
+    schedGrouped ? h('button', { class: 'link-row small', onclick: () => { st.schedOpen = !st.schedOpen; renderHome(root); } }, st.schedOpen ? 'Ocultar el detalle' : 'Ver uno por uno (o ajustar)') : null,
+    schedGrouped && st.schedOpen ? schedDue.map(i => pendingRow(i, ref, root)) : null,
     rest.map(i => pendingRow(i, ref, root)),
     later.length ? h('button', { class: 'link-row', onclick: () => { st.laterOpen = !st.laterOpen; renderHome(root); } },
-      st.laterOpen ? 'Ocultar las de más adelante' : `${later.length} más adelante este mes`) : null,
+      st.laterOpen ? 'Ocultar lo de más adelante' : `${later.length} más adelante este mes`) : null,
     st.laterOpen ? later.map(i => pendingRow(i, ref, root)) : null,
     canBadge ? h('button', { class: 'link-row small', onclick: async () => {
       try { await Notification.requestPermission(); } catch { /* ignore */ }

@@ -936,8 +936,18 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   const dedSeries = sp.map(r => sumOf(r, isPayrollDeduction));
   // gasto: sin los dividendos (van exactos aparte) ni los descuentos del sueldo (el ingreso ya es líquido);
   // los aportes a inversiones sí quedan: también salen de la cuenta
-  const ownSpend = (i) => sp[i].total - sumOf(sp[i], c => debtCats.has(c.id)) - dedSeries[i];
-  const incSeries = closed.map((ym, i) => incomeOfMonth(ym, owner, { extraordinary: false }) - dedSeries[i]);
+  // programados (sin los de un crédito: sus dividendos ya van exactos) y arriendo que ya se recibe: se
+  // proyectan tal cual y su historial sale de los promedios (si no, se contarían dos veces)
+  // (uno de una sola vez se suma, sin sacar su categoría de los promedios)
+  const sched = schedules().filter(x => { const c = category(x.categoryId); return c && !c.debtId; });
+  const schedIds = new Set(sched.map(x => x.id));
+  const schedCats = new Set(sched.filter(x => x.every && (!x.end || x.end >= cur)).map(x => x.categoryId));
+  const rentIn = rentReceived(schedCats);
+  const outOfBase = new Set([...schedCats, ...rentIn.cats]);
+  const incOut = (ym) => txsInMonth(ym).filter(t => t.kind === 'in' && t.paidBy === owner && outOfBase.has(t.categoryId) && (category(t.categoryId) || {}).kind === 'income').reduce((a, t) => a + txBase(t), 0);
+  const schedSpent = (r) => sumOf(r, c => schedCats.has(c.id) && !debtCats.has(c.id) && !isPayrollDeduction(c));
+  const ownSpend = (i) => sp[i].total - sumOf(sp[i], c => debtCats.has(c.id)) - dedSeries[i] - schedSpent(sp[i]);
+  const incSeries = closed.map((ym, i) => incomeOfMonth(ym, owner, { extraordinary: false }) - incOut(ym) - dedSeries[i]);
   const incomeBase = median(incSeries);
   const lumps = new Map();
   closed.forEach((ym, i) => { const extra = incSeries[i] - incomeBase; if (extra > Math.max(incomeBase, 1)) lumps.set(ym.slice(5), extra); });
@@ -963,6 +973,13 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   };
   const mortgages = db.all('debts').filter(d => d.mortgage && !d.archived);
   const shareMap = new Map(mortgages.map(d => [d.id, shareOf(d)]));     // sin tocar los registros guardados
+  // los programados de un mes que faltan (sin registrar ni omitir), con su signo y en tu parte
+  const occ = scheduleOccurrences(`${cur}-01`, monthEnd(addMonths(cur, months))).filter(o => !o.tx && !o.skipped && schedIds.has(o.s.id));
+  const schedOf = (ym, uf) => occ.filter(o => o.ym === ym).map(o => {
+    // en UF: con la UF proyectada de ese mes
+    const v = scheduleOwnerAmount(o.s, ym, o.s.uf ? o.s.uf * uf : o.s.amount * (o.s.currency === 'UF' ? uf : (rateFor(o.s.currency, today) ?? 1)));
+    return { name: o.s.desc || (category(o.s.categoryId) || {}).name || '', amount: o.s.kind === 'in' ? v : -v, date: o.date };
+  }).filter(x => Math.abs(x.amount) >= 0.5);
   const rows = [];
   let balance = liquid;
   // lo que queda del mes en curso: el ingreso típico que aún no llega (ej. el sueldo de fin de mes), el gasto
@@ -970,8 +987,8 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   {
     const spNow = spendingByCategory(cur, 'mine', owner);
     const dedNow = sumOf(spNow, isPayrollDeduction);
-    const incNow = incomeOfMonth(cur, owner, { extraordinary: false }) - dedNow;
-    const spentNow = spNow.total - sumOf(spNow, c => debtCats.has(c.id)) - dedNow;
+    const incNow = incomeOfMonth(cur, owner, { extraordinary: false }) - incOut(cur) - dedNow;
+    const spentNow = spNow.total - sumOf(spNow, c => debtCats.has(c.id)) - dedNow - schedSpent(spNow);
     const lump = lumps.get(cur.slice(5)) || 0;
     const income = Math.max(0, incomeBase + lump - incNow);
     const spend = Math.max(0, spendBase - spentNow);
@@ -983,9 +1000,11 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
       if (amt) dividends.push({ name: d.name, amount: amt * shareMap.get(d.id) * (d.currency === 'UF' ? uf0 : (rateFor(d.currency, today) ?? 1)), share: shareMap.get(d.id) });
     }
     const div = dividends.reduce((a, x) => a + x.amount, 0);
-    const net = income - spend - div;
+    const sc = schedOf(cur, uf0), schedNet = sc.reduce((a, x) => a + x.amount, 0);
+    const rentReal = rentIn.thisMonth ? 0 : rentIn.monthly;            // el de este mes, si aún no llega
+    const net = income - spend - div + schedNet + rentReal;
     balance += net;
-    rows.push({ ym: cur, partial: true, income, lump: Math.max(0, Math.min(lump, income)), spend, dividends, div, rent: 0, net, balance });
+    rows.push({ ym: cur, partial: true, income, lump: Math.max(0, Math.min(lump, income)), spend, dividends, div, rent: 0, rentReal, sched: sc, schedNet, net, balance });
   }
   for (let k = 1; k <= months; k++) {
     const ym = addMonths(cur, k);
@@ -1002,12 +1021,15 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
     const rentNet = rent && rent.uf && ym >= rent.from ? rent.uf * uf * (1 - (rent.adminPct || 0) / 100) : 0;
     const spend = spendBase * (uf / uf0);                       // el gasto sube con la inflación
     const income = incomeBase + (lumps.get(ym.slice(5)) || 0);
-    const net = income - spend - div + rentNet;
+    const sc = schedOf(ym, uf), schedNet = sc.reduce((a, x) => a + x.amount, 0);
+    const rentReal = rentIn.monthly;
+    const net = income - spend - div + rentNet + schedNet + rentReal;
     balance += net;
-    rows.push({ ym, income, lump: lumps.get(ym.slice(5)) || 0, spend, dividends, div, rent: rentNet, net, balance });
+    rows.push({ ym, income, lump: lumps.get(ym.slice(5)) || 0, spend, dividends, div, rent: rentNet, rentReal, sched: sc, schedNet, net, balance });
   }
   const yearIncome = incSeries.reduce((a, v) => a + v, 0);
-  return { incomeBase, yearIncome, deductions, lumps: [...lumps.entries()], spendBase, spendAvg, liquid, inflation: Math.pow(g, 12) - 1, rows };
+  return { incomeBase, yearIncome, deductions, lumps: [...lumps.entries()], spendBase, spendAvg, liquid, inflation: Math.pow(g, 12) - 1, rows,
+    rentReceived: rentIn.monthly ? rentIn.rows.map(r => ({ name: r.cat.name, monthly: r.monthly })) : [], scheduled: sched.length };
 }
 
 // Indicadores de salud financiera con su referencia (tasa de ahorro, fondo de emergencia, carga de los
@@ -1683,6 +1705,116 @@ export async function undoMerge({ fromId, toId, movedIds, prevName }) {
   if (to && to.name !== prevName) await db.put('categories', { ...to, name: prevName });
 }
 
+// ---- Programados: movimientos que se repiten o uno futuro ----------------------------------------
+// Ej. el arriendo que deposita la administradora, su comisión, un seguro. No se registran solos: el día que
+// corresponde aparecen en Pendientes para confirmarlos (con el monto de siempre o ajustándolo), y la
+// proyección de caja los cuenta desde ya.
+// { desc, kind: 'in'|'out', amount, currency, uf, accountId, categoryId, alloc, paidBy, tag, day, every (meses;
+//   0 = una vez), start: 'AAAA-MM', end: 'AAAA-MM' | null, skipped: ['AAAA-MM'] }
+// Con `uf` el monto está fijado en UF (ej. un arriendo de 33 UF): cada vez se registra en la moneda de la cuenta
+// con la UF de ese día.
+// Cada movimiento registrado desde uno guarda scheduleId y scheduleMonth (así no se pide dos veces).
+export const EVERY = [[0, 'Una vez'], [1, 'Cada mes'], [2, 'Cada 2 meses'], [3, 'Cada 3 meses'], [6, 'Cada 6 meses'], [12, 'Cada año']];
+export const everyLabel = (n) => (EVERY.find(e => e[0] === n) || [0, `Cada ${n} meses`])[1];
+export const schedules = () => db.all('schedules').filter(s => !s.archived);
+const monthDiff = (a, b) => (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5, 7)) - Number(a.slice(5, 7));
+// el día del mes; si el mes es más corto (ej. día 31 en febrero), el último día
+export const scheduleDate = (s, ym) => `${ym}-${String(Math.min(s.day || 1, Number(monthEnd(ym).slice(8)))).padStart(2, '0')}`;
+export function scheduleMonths(s, from, to) {
+  const end = s.end && s.end < to ? s.end : to;
+  if (!s.every) return s.start >= from && s.start <= end ? [s.start] : [];
+  let m = s.start;
+  if (m < from) m = addMonths(s.start, Math.ceil(monthDiff(s.start, from) / s.every) * s.every);
+  const out = [];
+  for (; m <= end; m = addMonths(m, s.every)) out.push(m);
+  return out;
+}
+// las fechas entre fromDate y toDate, con su movimiento si ya se registró
+export function scheduleOccurrences(fromDate, toDate) {
+  const done = new Map();
+  for (const t of db.all('tx')) if (t.scheduleId) done.set(t.scheduleId + '|' + t.scheduleMonth, t);
+  const out = [];
+  for (const s of schedules()) {
+    for (const ym of scheduleMonths(s, fromDate.slice(0, 7), toDate.slice(0, 7))) {
+      const date = scheduleDate(s, ym);
+      if (date < fromDate || date > toDate) continue;
+      out.push({ s, ym, date, key: s.id + '|' + ym, tx: done.get(s.id + '|' + ym) || null, skipped: (s.skipped || []).includes(ym) });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || (a.s.desc || '').localeCompare(b.s.desc || ''));
+}
+// la próxima fecha que falta confirmar (hasta 2 años adelante)
+export function nextOccurrence(s) {
+  const today = todayStr();
+  const occ = scheduleOccurrences(addMonths(curYm(), -2) + '-01', monthEnd(addMonths(curYm(), 24))).filter(o => o.s.id === s.id && !o.tx && !o.skipped);
+  return occ.find(o => o.date >= today) || occ[0] || null;
+}
+// monto de una fecha: fijo, o en UF con la UF de ese día (convertida a la moneda del programado)
+export function scheduleAmount(s, date) {
+  if (!s.uf) return s.amount;
+  const uf = rateFor('UF', date), r = rateFor(s.currency, date) ?? 1;
+  return uf ? Math.round(s.uf * uf / r * (currencyInfo(s.currency).decimals ? 100 : 1)) / (currencyInfo(s.currency).decimals ? 100 : 1) : s.amount;
+}
+// el movimiento de una fecha (sin tipo de cambio: lo pone quien lo guarda)
+export function scheduleTx(s, ym, over = {}) {
+  const acc = s.accountId && account(s.accountId);
+  const date = over.date || scheduleDate(s, ym);
+  return {
+    id: db.uid(), kind: s.kind, date, amount: scheduleAmount(s, date), currency: s.currency,
+    accountId: acc && !acc.archived ? acc.id : null, categoryId: s.categoryId, alloc: s.alloc || 'none', paidBy: s.paidBy || ownerId(),
+    desc: s.desc || '', ...(s.tag ? { tag: s.tag } : {}), scheduleId: s.id, scheduleMonth: ym, ...over,
+  };
+}
+export async function skipOccurrence(s, ym, undo = false) {
+  const cur = db.get('schedules', s.id);
+  if (!cur) return;
+  const list = (cur.skipped || []).filter(x => x !== ym);
+  await db.put('schedules', { ...cur, skipped: undo ? list : [...list, ym] });
+}
+// lo que le toca al dueño de un monto `v` (en moneda base): de un gasto compartido, su parte
+function scheduleOwnerAmount(s, ym, v) {
+  const owner = ownerId();
+  if (s.kind === 'in') return s.paidBy === owner || !s.paidBy ? v : 0;
+  const sh = shares({ alloc: s.alloc, paidBy: s.paidBy }, category(s.categoryId), splitFor(ym).pct, people());
+  return sh ? v * (sh[owner] || 0) : (s.paidBy === owner || !s.paidBy ? v : 0);
+}
+
+// Arriendo que ya se recibe: ingresos de una categoría de arriendo en los últimos 3 meses (los programados se
+// cuentan aparte). La proyección lo usa desde el primer mes, en vez de esperar a que pese en la mediana.
+export function rentReceived(skipCats = new Set()) {
+  const owner = ownerId(), cur = curYm();
+  const per = new Map();
+  for (const ym of [addMonths(cur, -2), addMonths(cur, -1), cur]) {
+    for (const t of txsInMonth(ym)) {
+      if (t.kind !== 'in' || t.paidBy !== owner) continue;
+      const c = category(t.categoryId);
+      if (!c || c.kind !== 'income' || c.extraordinary || skipCats.has(c.id) || !TAX_RX.rent.test(normKey(c.name))) continue;
+      let e = per.get(c.id);
+      if (!e) per.set(c.id, (e = { cat: c, months: {}, tags: new Set() }));
+      e.months[ym] = (e.months[ym] || 0) + txBase(t);
+      e.tags.add(t.tag || '');
+    }
+  }
+  // al mes: lo del último mes con arriendo
+  const rows = [...per.values()].map(e => { const last = Object.keys(e.months).sort().at(-1); return { ...e, last, monthly: e.months[last] }; });
+  return { rows, monthly: rows.reduce((a, r) => a + r.monthly, 0), cats: new Set(rows.map(r => r.cat.id)), thisMonth: rows.some(r => r.months[cur]) };
+}
+// Arriendos reales (recibidos o programados): las etiquetas de sus movimientos dicen de qué propiedad son.
+// "untagged": hay alguno sin etiqueta (no se sabe de cuál propiedad es).
+export function realRentTags() {
+  const tags = new Set();
+  let any = false, untagged = false;
+  for (const r of rentReceived().rows) { any = true; for (const t of r.tags) if (t) tags.add(t); else untagged = true; }
+  for (const s of schedules()) {
+    const c = category(s.categoryId);
+    if (s.kind !== 'in' || !c || c.kind !== 'income' || !TAX_RX.rent.test(normKey(c.name))) continue;
+    if (s.end && s.end < curYm()) continue;
+    any = true;
+    if (s.tag) tags.add(s.tag); else untagged = true;
+  }
+  return { any, tags, untagged };
+}
+
 // ---- Asistentes: cuentas fijas y pendientes del mes ----------------------------
 
 // Gastos que se pagan ~1 vez al mes: presentes en 5 de los 6 meses cerrados anteriores, con un solo
@@ -1722,7 +1854,9 @@ export function recurringBills(ref = curYm()) {
 // inversiones sin valorizar hace más de 35 días y respaldo atrasado (más de 14 días).
 export function pendingItems(ref = curYm(), { lastBackup = null, now = Date.now() } = {}) {
   const items = [];
-  const bills = recurringBills(ref);
+  // una categoría con un programado ya no se detecta como cuenta fija: se pide el programado
+  const schedCats = new Set(schedules().filter(s => s.every && (!s.end || s.end >= ref)).map(s => s.categoryId));
+  const bills = recurringBills(ref).filter(b => !schedCats.has(b.catId));
   const skip = new Set((settings().pendingSkip || {})[ref] || []);
   const paid = new Set();
   for (const t of db.all('tx')) if (t.kind === 'out' && t.date.slice(0, 7) === ref) { const c = category(t.categoryId); if (c) paid.add(c.id); }
@@ -1730,6 +1864,12 @@ export function pendingItems(ref = curYm(), { lastBackup = null, now = Date.now(
   for (const b of bills) {
     if (paid.has(b.catId) || skip.has(b.catId)) { done++; continue; }
     items.push({ type: 'bill', key: 'bill:' + b.catId, ...b });
+  }
+  // programados de este mes (y los de los 2 meses anteriores que quedaron sin confirmar)
+  const today = todayStr();
+  for (const o of scheduleOccurrences(addMonths(ref, -2) + '-01', monthEnd(ref))) {
+    if (o.tx || o.skipped) continue;
+    items.push({ type: 'sched', key: 'sched:' + o.key, ...o, day: Number(o.date.slice(8)), due: o.date <= today });
   }
   if (people().length > 1) {
     const prev = addMonths(ref, -1);

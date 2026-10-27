@@ -9,6 +9,7 @@ import { renderInvest } from './invest.js';
 import { renderPoints } from './points.js';
 import { renderProperties } from './properties.js';
 import { renderDebts } from './debts.js';
+import { renderSchedules } from './schedules.js';
 import { openAccount } from './account.js';
 import * as Drive from '../drive.js';
 import { renderTax } from './tax.js';
@@ -636,6 +637,7 @@ export function renderMore(root, sub) {
   if (sub === 'propiedades') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Propiedades'), inner); renderProperties(inner); return () => renderProperties(inner); }
   if (sub === 'puntos') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Puntos y millas'), inner); renderPoints(inner); return () => renderPoints(inner); }
   if (sub === 'renta') { renderTax(root, back()); return () => renderTax(root, back()); }
+  if (sub === 'programados') { renderSchedules(root, back()); return () => renderSchedules(root, back()); }
   if (sub === 'deudas') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Deudas'), inner); renderDebts(inner); return () => renderDebts(inner); }
   if (subs[sub]) { const r = subs[sub](root); return typeof r === 'function' ? r : () => subs[sub](root); }
   const item = (to, icon, title, sub2) => h('a', { class: 'row link', href: '#/mas/' + to }, h('div', { class: 'icon' }, icon), h('div', { class: 'main' }, h('div', { class: 'title' }, title), h('div', { class: 'sub' }, sub2)), h('div', { class: 'chev' }, '›'));
@@ -644,7 +646,8 @@ export function renderMore(root, sub) {
       item('inversiones', '📈', 'Inversiones', 'Fondos, acciones, ETF, AFP, APV: valor, precios y dividendos'),
       item('propiedades', '🏠', 'Propiedades', 'Valor, crédito hipotecario, plusvalía y arriendo'),
       item('puntos', '🎁', 'Puntos y millas', 'Millas, puntos de tarjetas y otros programas'),
-      item('deudas', '🤝', 'Deudas', 'Lo que debes o te deben, en cualquier moneda')),
+      item('deudas', '🤝', 'Deudas', 'Lo que debes o te deben, en cualquier moneda'),
+      item('programados', '🔁', 'Programados', 'Lo que se repite cada mes o llega más adelante: se confirma en un toque')),
     h('section', { class: 'card' },
       item('categorias', '🏷️', 'Categorías', 'Tus ítems de gasto: nombre, grupo, reparto'),
       item('cuentas', '🏦', 'Cuentas', 'Bancos, tarjetas y efectivo'),
