@@ -29,7 +29,7 @@ export async function registerOccurrences(list) {
 export function openOccurrence(o) {
   const t = occurrenceTx(o);
   openTxForm(null, {
-    kind: t.kind, date: t.date, amount: numText(t.amount), currency: t.currency, accountId: t.accountId, categoryId: t.categoryId,
+    kind: t.kind, date: t.date, amount: numText(o.s.uf || t.amount), entryUF: !!o.s.uf, currency: t.currency, accountId: t.accountId, categoryId: t.categoryId,
     desc: t.desc, tag: t.tag || '', paidBy: t.paidBy, alloc: t.alloc, scheduleId: o.s.id, scheduleMonth: o.ym, focus: 'amount',
   });
 }

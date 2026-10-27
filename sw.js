@@ -4,7 +4,7 @@
 // Actualizaciones atómicas: cada versión se descarga completa al instalarse (saltándose la caché del
 // CDN con ?v=VERSION) y se sirve solo desde su propia caché. Nunca se mezclan archivos de dos versiones.
 // Sube VERSION cada vez que publiques cambios.
-const VERSION = 'moni-v35';
+const VERSION = 'moni-v36';
 // el script del lector de comprobantes queda en su propia caché, entre versiones. Solo ese archivo: su
 // worker y su núcleo (wasm) los pide el propio lector y el navegador los guarda; interceptarlos lo colgaba.
 const OCR_CACHE = 'moni-ocr-lib-5.1.1';   // nombre nuevo: borra la caché anterior (guardaba también el núcleo)

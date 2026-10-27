@@ -1762,7 +1762,7 @@ export function scheduleTx(s, ym, over = {}) {
   return {
     id: db.uid(), kind: s.kind, date, amount: scheduleAmount(s, date), currency: s.currency,
     accountId: acc && !acc.archived ? acc.id : null, categoryId: s.categoryId, alloc: s.alloc || 'none', paidBy: s.paidBy || ownerId(),
-    desc: s.desc || '', ...(s.tag ? { tag: s.tag } : {}), scheduleId: s.id, scheduleMonth: ym, ...over,
+    desc: s.desc || '', ...(s.tag ? { tag: s.tag } : {}), ...(s.uf ? { uf: s.uf } : {}), scheduleId: s.id, scheduleMonth: ym, ...over,
   };
 }
 export async function skipOccurrence(s, ym, undo = false) {

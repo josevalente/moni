@@ -100,7 +100,8 @@ export function openTxForm(existing, defaults = {}) {
     kind: 'out', date: today, amount: '', currency: null, accountId: null, toAccountId: null,
     categoryId: null, desc: '', paidBy: me, alloc: null, allocTouched: false, allocManual: false, fx: null, fxTouched: false,
     tag: '', to: null, settleMonth: null, toAmount: '', accTouched: false, open: null, lastAmount: lastAmountDefault || null,
-    repeat: null,   // { every, day, end, uf }: también queda programado
+    repeat: null,   // { every, day, end }: también queda programado
+    entryUF: false, // el monto se escribe en UF y se guarda en la moneda de la cuenta con la UF de la fecha
     ...rest,
   };
   if (isEdit) {
@@ -109,6 +110,7 @@ export function openTxForm(existing, defaults = {}) {
       desc: existing.desc || '', tag: existing.tag || '',
       toAmount: existing.toAmount != null ? numText(existing.toAmount) : '',
     });
+    if (existing.uf) { s.entryUF = true; s.amount = numText(existing.uf); }
     s.alloc = allocToState(existing.alloc);
     s.allocTouched = true;
     s.allocManual = s.alloc !== allocToState((M.category(existing.categoryId) || {}).defaultAlloc);
@@ -149,7 +151,17 @@ export function openTxForm(existing, defaults = {}) {
     s.accountId = id || null;
     s.accTouched = true;
     if (acc()) { s.currency = acc().currency; s.fxTouched = false; }
+    if (!canUF()) s.entryUF = false;
   }
+  // en UF: solo si la moneda del movimiento no es UF y la UF está entre las monedas
+  const canUF = () => (s.kind === 'out' || s.kind === 'in') && s.currency !== 'UF' && M.settings().currencies.some(c => c.code === 'UF');
+  // monto en la moneda del movimiento, con la UF de su fecha (null si falta el valor de la UF)
+  const fromUF = (v) => {
+    const uf = M.rateFor('UF', s.date), r = M.rateFor(s.currency, s.date) ?? 1;
+    if (!uf || !Number.isFinite(v)) return null;
+    const dec = M.currencyInfo(s.currency).decimals ? 100 : 1;
+    return Math.round(v * uf / r * dec) / dec;
+  };
 
   // Monto que llega en una transferencia entre monedas, según el tipo de cambio del día.
   const convert = (amt, from, to) => {
@@ -229,23 +241,6 @@ export function openTxForm(existing, defaults = {}) {
   // repetir: día del mes, hasta cuándo y, si se quiere, el monto fijado en UF
   const repDayIn = h('input', { type: 'text', inputmode: 'numeric', 'aria-label': 'Día del mes', placeholder: 'día' });
   const repEndIn = h('input', { type: 'month', 'aria-label': 'Hasta (opcional)' });
-  const repUfIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Monto en UF', placeholder: 'UF' });
-  const repUfHint = h('small', { class: 'muted' });
-  repDayIn.addEventListener('input', () => { const d = Math.round(Number(repDayIn.value)); if (s.repeat && d >= 1 && d <= 31) { s.repeat.day = d; updateSummaryLabels(); } });
-  repEndIn.addEventListener('change', () => { if (s.repeat) s.repeat.end = repEndIn.value || ''; });
-  // el monto en pesos sale de la UF del día (y se actualiza al escribir las UF)
-  const ufToAmount = () => {
-    if (!s.repeat) return;
-    const ufv = M.parseAmount(repUfIn.value);
-    s.repeat.uf = Number.isFinite(ufv) && ufv > 0 ? ufv : null;
-    const v = s.repeat.uf && M.rateFor('UF', s.date) ? M.scheduleAmount({ uf: s.repeat.uf, amount: 0, currency: s.currency }, s.date) : null;
-    if (v) { s.amount = numText(v); amountIn.value = s.amount; updateEval(); updateFx(); }
-    repUfHint.textContent = !s.repeat.uf ? '' : v
-      ? `Con la UF del ${new Date(s.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}: ${M.fmt(v, s.currency)}. Cada vez se calcula con la UF de ese día.`
-      : 'Sin valor de la UF guardado: actualízalo en Más › Monedas.';
-    updateSummaryLabels();
-  };
-  repUfIn.addEventListener('input', ufToAmount);
 
   // ---- sugerencias por descripción
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
@@ -452,8 +447,15 @@ export function openTxForm(existing, defaults = {}) {
   function updateEval() {
     const expr = M.isAmountExpression(s.amount);
     const v = M.evalAmount(s.amount);
-    evalHint.textContent = expr ? (Number.isFinite(v) ? `= ${M.fmt(v, s.currency)}` : 'Revisa la operación') : '';
-    evalHint.classList.toggle('bad', expr && !Number.isFinite(v));
+    if (s.entryUF && Number.isFinite(v)) {
+      const c = fromUF(v);
+      const when = new Date(s.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+      evalHint.textContent = c != null ? `${expr ? `= ${numText(v)} UF ` : ''}= ${M.fmt(c, s.currency)} con la UF del ${when}` : 'Falta el valor de la UF: actualízalo en Más › Monedas';
+      evalHint.classList.toggle('bad', c == null);
+    } else {
+      evalHint.textContent = expr ? (Number.isFinite(v) ? `= ${M.fmt(v, s.currency)}` : 'Revisa la operación') : '';
+      evalHint.classList.toggle('bad', expr && !Number.isFinite(v));
+    }
     amountIn.classList.toggle('expr', expr);
     fill(lastAmtBox, s.lastAmount && !s.amount ? h('button', {
       type: 'button', class: 'chip small last-amount',
@@ -495,7 +497,7 @@ export function openTxForm(existing, defaults = {}) {
     return 'Compartido ' + people.map(p => Math.round((pct[p.id] || 0) * 100)).join('/');
   }
   const allocLabel = () => (s.alloc === 'shared' ? splitLabel() : `Solo de ${M.personName(s.alloc === 'payer' || !s.alloc ? s.paidBy : s.alloc)}`);
-  const repeatLabel = () => (s.repeat ? `${M.everyLabel(s.repeat.every)}, día ${s.repeat.day}${s.repeat.uf ? ` · ${numText(s.repeat.uf)} UF` : ''}` : 'Repetir');
+  const repeatLabel = () => (s.repeat ? `${M.everyLabel(s.repeat.every)}, día ${s.repeat.day}${s.entryUF ? ' · en UF' : ''}` : 'Repetir');
   const canRepeat = () => !isEdit && !s.scheduleId && (s.kind === 'out' || s.kind === 'in');
   // con fecha futura no se registra todavía: queda programado
   let futureNote = null;
@@ -509,7 +511,7 @@ export function openTxForm(existing, defaults = {}) {
   dateIn.addEventListener('change', () => {
     s.date = dateIn.value || today;
     s.fxTouched = false;
-    if (s.repeat && s.repeat.uf) ufToAmount();        // en UF: el monto es el de la UF de esa fecha
+    if (s.entryUF) updateEval();                       // en UF: el equivalente cambia con la fecha
     updateFx(); updateSummaryLabels();
     if (toAmtInput) toAmtInput.placeholder = toAmtHint();
   });
@@ -556,10 +558,18 @@ export function openTxForm(existing, defaults = {}) {
       canFill ? h('button', { type: 'button', class: 'chip small', onclick: () => fileIn.click() }, '📷 Comprobante') : null,
       fileIn));
     if (isFlow) parts.push(h('div', { class: 'desc-wrap' }, descIn, suggestBox));
+    // con cuenta, la moneda es la de la cuenta; también se puede escribir en UF (se guarda convertido)
+    if (!canUF()) s.entryUF = false;
+    const curOpts = s.accountId ? [s.currency, ...(canUF() ? ['UF'] : [])] : M.settings().currencies.map(c => c.code);
     parts.push(h('div', { class: 'amount-row' }, amountIn, h('select', {
-      class: 'cur', disabled: !!s.accountId, 'aria-label': 'Moneda', title: s.accountId ? 'La moneda la define la cuenta' : '',
-      onchange: (e) => { s.currency = e.target.value; s.fxTouched = false; updateFx(); updateEval(); },
-    }, M.settings().currencies.map(c => h('option', { value: c.code, selected: c.code === s.currency }, c.code)))));
+      class: 'cur', disabled: curOpts.length < 2, 'aria-label': 'Moneda', title: s.accountId ? 'La moneda la define la cuenta; en UF se guarda convertido con la UF de la fecha' : '',
+      onchange: (e) => {
+        if (s.accountId) s.entryUF = e.target.value === 'UF';
+        else { s.currency = e.target.value; s.entryUF = false; }
+        s.fxTouched = false; updateFx(); updateEval(); updateSummaryLabels();
+        if (s.entryUF) FX.ensureFresh('UF').then(updateEval).catch(() => {});   // sin el valor de hoy: se consulta
+      },
+    }, curOpts.map(c => h('option', { value: c, selected: c === (s.entryUF ? 'UF' : s.currency) }, c)))));
     parts.push(calcKeys);
     parts.push(h('div', { class: 'amount-help' }, evalHint, lastAmtBox));
     parts.push(h('div', { class: 'fxline' }));
@@ -637,20 +647,17 @@ export function openTxForm(existing, defaults = {}) {
       } else if (s.open === 'repeat' && canRepeat()) {
         const pick = (v) => {
           const n = Number(v);
-          s.repeat = n ? { day: Number(s.date.slice(8)), end: '', uf: null, ...(s.repeat || {}), every: n } : null;
+          s.repeat = n ? { day: Number(s.date.slice(8)), end: '', ...(s.repeat || {}), every: n } : null;
           render();
         };
         const opts = [{ v: '0', l: 'No' }, ...M.EVERY.filter(e => e[0]).map(e => ({ v: String(e[0]), l: e[1].replace('Cada ', '') }))];
         if (s.repeat) { repDayIn.value = String(s.repeat.day); repEndIn.value = s.repeat.end || ''; }
-        const ufOk = s.currency !== 'UF' && M.settings().currencies.some(c => c.code === 'UF');
         parts.push(h('div', { class: 'sum-editor' },
           seg(opts, String(s.repeat ? s.repeat.every : 0), pick, 'Repetir cada'),
           s.repeat ? h('div', { class: 'rep-fields' },
             h('label', { class: 'fc-field' }, h('span', null, 'Día del mes'), repDayIn),
-            h('label', { class: 'fc-field' }, h('span', null, 'Hasta (opcional)'), repEndIn),
-            ufOk ? h('label', { class: 'fc-field' }, h('span', null, 'Fijo en UF (opcional)'), repUfIn) : null) : null,
-          s.repeat && ufOk ? repUfHint : null,
-          s.repeat ? h('small', { class: 'muted' }, `Desde ${M.monthName(s.date.slice(0, 7)).toLowerCase()}: el día ${s.repeat.day} aparece en Pendientes para confirmarlo (con este monto o ajustándolo) y la proyección de caja ya lo cuenta.`) : null));
+            h('label', { class: 'fc-field' }, h('span', null, 'Hasta (opcional)'), repEndIn)) : null,
+          s.repeat ? h('small', { class: 'muted' }, `Desde ${M.monthName(s.date.slice(0, 7)).toLowerCase()}: el día ${s.repeat.day} aparece en Pendientes para confirmarlo (con este monto o ajustándolo) y la proyección de caja ya lo cuenta.${s.entryUF ? ' En UF: cada vez con la UF de ese día.' : canUF() ? ' Para fijarlo en UF, elige UF junto al monto.' : ''}`) : null));
       }
     } else {
       // transferencias y pagos entre ustedes: formato clásico
@@ -701,10 +708,14 @@ export function openTxForm(existing, defaults = {}) {
     if (s.kind === 'transfer' && (!s.accountId || !s.toAccountId || s.accountId === s.toAccountId)) { toast('Elige dos cuentas distintas'); return; }
     if (s.kind === 'settle' && (!s.to || s.to === s.paidBy)) { toast('Elige quién paga y quién recibe'); return; }
     if (s.accountId && acc() && acc().currency !== s.currency) s.currency = acc().currency;   // nunca un monto en otra moneda que su cuenta
+    // escrito en UF: se guarda en la moneda de la cuenta con la UF de la fecha (y se recuerdan las UF)
+    const ufAmount = s.entryUF && canUF() ? Math.abs(amount) : null;
+    if (ufAmount != null && fromUF(ufAmount) == null) await FX.ensureFresh('UF').catch(() => {});
+    if (ufAmount != null && fromUF(ufAmount) == null) { toast('Falta el valor de la UF de esa fecha: actualízalo en Más › Monedas'); return; }
 
     const tx = {
       ...(isEdit ? existing : {}),
-      date: s.date, kind: s.kind, amount: Math.abs(amount), currency: s.currency,
+      date: s.date, kind: s.kind, amount: ufAmount != null ? fromUF(ufAmount) : Math.abs(amount), currency: s.currency,
       accountId: s.accountId || null, desc: (s.desc || '').trim(), tag: (s.tag || '').trim() || undefined, paidBy: s.paidBy,
     };
     if (!isEdit) tx.id = db.uid();
@@ -738,6 +749,7 @@ export function openTxForm(existing, defaults = {}) {
       if (!ownerInvolved()) tx.accountId = null;
     }
     if (!tx.tag) delete tx.tag;
+    if (ufAmount != null) tx.uf = ufAmount; else delete tx.uf;
     // desde un programado (Pendientes): queda confirmado ese mes
     if (!isEdit && s.scheduleId) { tx.scheduleId = s.scheduleId; tx.scheduleMonth = s.scheduleMonth; }
     const before = isEdit ? { ...existing } : null;
@@ -747,7 +759,7 @@ export function openTxForm(existing, defaults = {}) {
       // programado: con fecha futura solo se programa; si es de hoy (o antes), se registra y se repite
       const sc = {
         id: db.uid(), desc: tx.desc, kind: tx.kind, amount: tx.amount, currency: tx.currency, accountId: tx.accountId, categoryId: tx.categoryId,
-        alloc: tx.alloc, paidBy: tx.paidBy, ...(tx.tag ? { tag: tx.tag } : {}), ...(rep && rep.uf ? { uf: rep.uf } : {}),
+        alloc: tx.alloc, paidBy: tx.paidBy, ...(tx.tag ? { tag: tx.tag } : {}), ...(ufAmount != null ? { uf: ufAmount } : {}),
         day: rep ? rep.day : Number(s.date.slice(8)), every: rep ? rep.every : 0, start: s.date.slice(0, 7), end: (rep && rep.end) || null, skipped: [],
       };
       await db.put('schedules', sc);
@@ -764,7 +776,7 @@ export function openTxForm(existing, defaults = {}) {
     }
     if (again && !isEdit) {
       // otro del mismo ticket: se conservan categoría, cuenta, fecha, pagador y reparto
-      s.amount = ''; s.desc = ''; s.lastAmount = null; amountIn.value = ''; descIn.value = ''; s.fxTouched = false; s.open = null; s.repeat = null; repUfIn.value = '';
+      s.amount = ''; s.desc = ''; s.lastAmount = null; amountIn.value = ''; descIn.value = ''; s.fxTouched = false; s.open = null; s.repeat = null;
       render();
       ((s.kind === 'out' || s.kind === 'in') ? descIn : amountIn).focus();
     } else m.close();
