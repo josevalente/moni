@@ -222,39 +222,36 @@ export function dividendCategoryFor(amount, date) {
   return best ? best.cat : null;
 }
 
-// Monto con operaciones simples, como en las celdas del Excel: "7.000+6.900", "45.990-5.000", "12.500*2".
-// Cada número usa el formato chileno de parseAmount; * y / van antes que + y -.
-export const isAmountExpression = (str) => /[+*/x×÷]|\d\s*-/i.test(String(str ?? '').replace(/^\s*-/, ''));
+// Monto con operaciones, como en las celdas del Excel: "7.000+6.900", "45.990-5.000", "12.500*2", "(3.990+2.500)*3".
+// Cada número usa el formato chileno de parseAmount; * y / van antes que + y -, y los paréntesis primero.
+export const isAmountExpression = (str) => /[+*/x×÷()]|\d\s*-/i.test(String(str ?? '').replace(/^\s*-/, ''));
 export function evalAmount(str) {
-  const src = String(str ?? '').replace(/\s|\$/g, '').replace(/[x×]/gi, '*').replace(/÷/g, '/');
+  const src = String(str ?? '').replace(/\s|\$/g, '').replace(/[x×]/gi, '*').replace(/÷/g, '/').replace(/[−–]/g, '-');
   if (!src) return NaN;
   if (!isAmountExpression(src)) return parseAmount(src);
-  const tokens = src.match(/\d[\d.,]*|[+\-*/]/g);
+  const tokens = src.match(/\d[\d.,]*|[+\-*/()]/g);
   if (!tokens || tokens.join('') !== src) return NaN;
-  // números (con signo unario) y operadores alternados
-  const nums = [], ops = [];
-  let expectNum = true, neg = false;
-  for (const t of tokens) {
-    if (expectNum) {
-      if (t === '-' || t === '+') { if (t === '-') neg = !neg; continue; }
-      const n = parseAmount(t);
-      if (!Number.isFinite(n)) return NaN;
-      nums.push(neg ? -n : n); neg = false; expectNum = false;
-    } else {
-      if (!/^[+\-*/]$/.test(t)) return NaN;
-      ops.push(t); expectNum = true;
-    }
-  }
-  if (expectNum) return NaN;                       // termina en operador
-  // primero * y /
-  for (let i = 0; i < ops.length;) {
-    if (ops[i] === '*' || ops[i] === '/') {
-      const r = ops[i] === '*' ? nums[i] * nums[i + 1] : nums[i] / nums[i + 1];
-      nums.splice(i, 2, r); ops.splice(i, 1);
-    } else i++;
-  }
-  let v = nums[0];
-  ops.forEach((o, i) => { v = o === '+' ? v + nums[i + 1] : v - nums[i + 1]; });
+  let i = 0;
+  // número, (operación) o con signo delante ("-5.000", "-(2+3)")
+  const factor = () => {
+    const t = tokens[i++];
+    if (t === '-') return -factor();
+    if (t === '+') return factor();
+    if (t === '(') { const v = sum(); return tokens[i++] === ')' ? v : NaN; }
+    return t != null && /^\d/.test(t) ? parseAmount(t) : NaN;
+  };
+  const product = () => {
+    let v = factor();
+    while (tokens[i] === '*' || tokens[i] === '/') { const op = tokens[i++]; const r = factor(); v = op === '*' ? v * r : v / r; }
+    return v;
+  };
+  const sum = () => {
+    let v = product();
+    while (tokens[i] === '+' || tokens[i] === '-') { const op = tokens[i++]; const r = product(); v = op === '+' ? v + r : v - r; }
+    return v;
+  };
+  const v = sum();
+  if (i !== tokens.length) return NaN;              // sobra algo: ")" de más o termina raro
   return Number.isFinite(v) ? Math.round(v * 1e6) / 1e6 : NaN;
 }
 

@@ -200,6 +200,28 @@ export function openTxForm(existing, defaults = {}) {
 
   const amountIn = h('input', { class: 'amount', type: 'text', inputmode: 'decimal', placeholder: '0', value: groupDigits(s.amount), autocomplete: 'off', 'aria-label': 'Monto' });
   const evalHint = h('span', { class: 'amount-eval', 'aria-live': 'polite' });
+  // teclas de operaciones mientras se escribe el monto: el teclado numérico del iPhone no tiene + − × ÷
+  const keepFocus = (e) => e.preventDefault();      // tocar una tecla no saca el foco del monto (el teclado sigue)
+  const calcKeys = h('div', { class: 'calc-keys', hidden: true },
+    [['+', '+', 'Sumar'], ['−', '-', 'Restar'], ['×', '×', 'Multiplicar'], ['÷', '÷', 'Dividir'], ['(', '(', 'Abrir paréntesis'], [')', ')', 'Cerrar paréntesis'], ['=', '=', 'Calcular']]
+      .map(([label, key, name]) => h('button', { type: 'button', class: 'chip small calc-key' + (key === '=' ? ' eq' : ''), 'aria-label': name, onpointerdown: keepFocus, onmousedown: keepFocus, onclick: () => calcPress(key) }, label)));
+  function calcPress(key) {
+    const v = amountIn.value;
+    if (key === '=') {
+      const r = M.evalAmount(v);
+      if (!Number.isFinite(r)) { amountIn.focus(); return; }   // el aviso "Revisa la operación" ya se ve
+      amountIn.value = numText(r);
+    } else {
+      const a = amountIn.selectionStart ?? v.length, b = amountIn.selectionEnd ?? a;
+      amountIn.value = v.slice(0, a) + key + v.slice(b);
+      amountIn.setSelectionRange(a + key.length, a + key.length);
+    }
+    amountIn.focus();
+    amountIn.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  let calcHide = 0;
+  amountIn.addEventListener('focus', () => { clearTimeout(calcHide); calcKeys.hidden = false; });
+  amountIn.addEventListener('blur', () => { calcHide = setTimeout(() => { calcKeys.hidden = true; }, 250); });
   const lastAmtBox = h('span');
   const dateIn = h('input', { type: 'date', value: s.date, 'aria-label': 'Fecha' });
   const tagIn = h('input', { type: 'text', placeholder: 'Ej: Viaje sur', value: s.tag, list: 'taglist', 'aria-label': 'Etiqueta' });
@@ -411,6 +433,7 @@ export function openTxForm(existing, defaults = {}) {
     const v = M.evalAmount(s.amount);
     evalHint.textContent = expr ? (Number.isFinite(v) ? `= ${M.fmt(v, s.currency)}` : 'Revisa la operación') : '';
     evalHint.classList.toggle('bad', expr && !Number.isFinite(v));
+    amountIn.classList.toggle('expr', expr);
     fill(lastAmtBox, s.lastAmount && !s.amount ? h('button', {
       type: 'button', class: 'chip small last-amount',
       onclick: () => { s.amount = numText(s.lastAmount.amount); amountIn.value = s.amount; updateEval(); updateFx(); },
@@ -509,6 +532,7 @@ export function openTxForm(existing, defaults = {}) {
       class: 'cur', disabled: !!s.accountId, 'aria-label': 'Moneda', title: s.accountId ? 'La moneda la define la cuenta' : '',
       onchange: (e) => { s.currency = e.target.value; s.fxTouched = false; updateFx(); updateEval(); },
     }, M.settings().currencies.map(c => h('option', { value: c.code, selected: c.code === s.currency }, c.code)))));
+    parts.push(calcKeys);
     parts.push(h('div', { class: 'amount-help' }, evalHint, lastAmtBox));
     parts.push(h('div', { class: 'fxline' }));
 

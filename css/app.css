@@ -152,6 +152,7 @@ select:disabled { opacity: .65; }
 /* Captura */
 .amount-row { display: flex; gap: 10px; margin: 12px 0 6px; }
 .amount { font-size: 34px !important; font-weight: 700; min-height: 64px !important; text-align: right; font-variant-numeric: tabular-nums; }
+.amount.expr { font-size: 24px !important; }   /* una operación larga cabe */
 .cur { width: 96px !important; flex: none; }
 .fxline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; min-height: 0; }
 .txform > * + * { margin-top: 12px; }
@@ -300,6 +301,10 @@ select:disabled { opacity: .65; }
 .amount-eval { font-size: 14px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 .amount-eval.bad { color: var(--neg); }
 .chip.small { min-height: 32px; padding: 4px 12px; font-size: 13px; }
+.calc-keys { display: flex; gap: 6px; margin: -2px 0 8px; }
+.calc-keys[hidden] { display: none; }
+.chip.calc-key { flex: 1; min-width: 0; padding: 4px 0; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.calc-key.eq { color: var(--brand); }
 .cat-chips { padding-bottom: 6px; }
 /* el ancho de un select lo fija su opción más larga: se acota para que "Otra…" sea un botón más */
 .chip-select { width: 108px; flex: none; min-height: 40px; border-radius: 99px; padding: 6px 28px 6px 14px; font-size: 15px; background-color: var(--card); text-overflow: ellipsis; }
