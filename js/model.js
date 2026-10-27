@@ -1400,12 +1400,15 @@ export function taxSummary(year) {
       }
     }
     const tag = p.tag;
-    const rentIn = tag ? db.all('tx').filter(t => t.kind === 'in' && inYear(t.date) && t.tag === tag && t.paidBy === owner && (category(t.categoryId) || {}).kind === 'income').reduce((a, t) => a + txBase(t), 0) : 0;
+    const rentTx = tag ? db.all('tx').filter(t => t.kind === 'in' && inYear(t.date) && t.tag === tag && t.paidBy === owner && (category(t.categoryId) || {}).kind === 'income') : [];
+    const rentIn = rentTx.reduce((a, t) => a + txBase(t), 0);
+    // los de una categoría de arriendo ya suman en los ingresos por arriendo: no se cuentan dos veces
+    const rentExtra = rentTx.filter(t => groupOf(category(t.categoryId)) !== 'rent').reduce((a, t) => a + txBase(t), 0);
     const contrib = tag ? db.all('tx').filter(t => t.kind === 'out' && inYear(t.date) && t.tag === tag && TAX_RX.contrib.test(name(category(t.categoryId)))).reduce((a, t) => a + txBase(t), 0) : null;
     const rp = rateFor(p.currency, to) ?? 1;
     return {
       p, value: s.value, valueBase: s.value * rp, currency: p.currency, debt: s.debt, debtBase: s.debt * rp, partnerClaim: s.partnerClaim,
-      mortgage: d ? { name: d.name, cuotas, interest, interestUF, paid, paidUF, currency: d.currency } : null, rentIn, contrib, archived: !!p.archived,
+      mortgage: d ? { name: d.name, cuotas, interest, interestUF, paid, paidUF, currency: d.currency } : null, rentIn, rentExtra, contrib, archived: !!p.archived,
     };
   }).filter(x => x.value > 0 || (x.mortgage && x.mortgage.cuotas));     // solo las que eran tuyas ese año
   // cuentas y deudas al 31 de diciembre; las de otra moneda se marcan (pueden ser cuentas en el extranjero)
@@ -1421,7 +1424,7 @@ export function taxSummary(year) {
     income: incomeRows, deductions: dedRows, expenses: expRows,
     totals: {
       salary: sum(incomeRows, r => r.group === 'salary'), dividend: sum(incomeRows, r => r.group === 'dividend') + investments.reduce((a, x) => a + x.dividends * (rateEnd(x.currency) ?? 1), 0),
-      interest: sum(incomeRows, r => r.group === 'interest'), rent: sum(incomeRows, r => r.group === 'rent') + properties.reduce((a, x) => a + x.rentIn, 0),
+      interest: sum(incomeRows, r => r.group === 'interest'), rent: sum(incomeRows, r => r.group === 'rent') + properties.reduce((a, x) => a + x.rentExtra, 0),
       other: sum(incomeRows, r => r.group === 'other'), extra: sum(incomeRows, r => r.group === 'extra'),
       taxWithheld: sum(dedRows, r => r.isTax), deductions: sum(dedRows),
       mortgageInterest: properties.reduce((a, x) => a + (x.mortgage ? x.mortgage.interest : 0), 0),
