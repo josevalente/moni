@@ -543,7 +543,14 @@ details summary { cursor: pointer; font-weight: 600; margin: 6px 0; }
 .tax-report .tx-head p { font-size: 13px; }
 
 /* ---- programados ---- */
-.rep-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.rep-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
 .sched-note { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--card-2, var(--card)); border: 1px solid var(--line); font-size: 13px; }
 .sched-note[hidden] { display: none; }
 .sched-list .row .sub { white-space: normal; }
+
+/* iPhone: Safari hace zoom al tocar un campo con letra de menos de 16 px (ej. los de Repetir o la simulación
+   de arriendo, que heredan 12 px). Todos los campos quedan en 16 px o más. */
+@supports (-webkit-touch-callout: none) {
+  :where(input:not([type=checkbox]):not([type=radio]), select, textarea) { font-size: max(16px, 1em) !important; }   /* sin especificidad: el monto grande (34 px) se mantiene */
+}
+.fc-field input, .fc-field select { font-size: 16px; }
