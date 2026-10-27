@@ -34,6 +34,7 @@ export function txRow(tx, { showDate = false } = {}) {
     else if (acc && ppl.length > 0) sub.push(acc.name);
   }
   if (tx.tag) sub.push('#' + tx.tag);
+  if (tx.scheduleId) sub.push('🔁');                       // registrado desde un programado
   return h('button', { class: 'row tx ' + cls, onclick: () => openTxForm(tx) },
     h('div', { class: 'main' },
       h('div', { class: 'title' }, title),
@@ -92,6 +93,7 @@ export function renderTxs(root, sub) {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean).map(text => ({ text, num: /^-?[\d.,]+$/.test(text) && Number.isFinite(M.parseAmount(text)) ? M.parseAmount(text) : null }));
     fill(cal, q ? null : entryCalendar(state.ym));
     fill(chips, h('button', { class: 'chip more', onclick: pickAccount }, '🏦 Por cuenta'),
+      h('a', { class: 'chip more', href: '#/mas/programados' }, '🔁 Programados'),
       h('button', { class: 'chip more' + (state.sel ? ' on' : ''), 'aria-pressed': String(!!state.sel), onclick: () => { state.sel = state.sel ? null : new Set(); draw(); } }, state.sel ? '✕ Salir de selección' : '☑ Seleccionar'),
       ...filters.map(([k, l]) => h('button', { class: 'chip' + (state.filter === k ? ' on' : ''), 'aria-pressed': String(state.filter === k), onclick: () => { state.filter = k; draw(); } }, l)));
     fill(head, q ? h('div', { class: 'muted' }, 'Resultados en todo el historial') : [

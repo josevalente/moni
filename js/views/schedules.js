@@ -7,7 +7,6 @@ import { fill, h, modal, toast, formModal, numText } from '../ui.js';
 import { openTxForm } from './add.js';
 
 const fmtDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
-const amountText = (s, date) => `${M.fmt(M.scheduleAmount(s, date || M.todayStr()), s.currency)}${s.uf ? ` (${numText(s.uf)} UF)` : ''}`;
 export const occurrenceTitle = (o) => o.s.desc || (M.category(o.s.categoryId) || {}).name || 'Programado';
 
 // el movimiento listo para guardar: con el monto de siempre (o el de la UF de ese día) y su tipo de cambio
@@ -50,22 +49,40 @@ export function skipOccurrenceDialog(o) {
 
 export function editSchedule(sc) {
   const ufOk = sc.currency !== 'UF' && M.settings().currencies.some(c => c.code === 'UF');
+  const kinds = sc.kind === 'in' ? ['income', 'loan', 'invest', 'adjust', 'expense'] : ['expense', 'loan', 'invest', 'adjust'];
+  const cats = M.categories().filter(c => (!c.archived || c.id === sc.categoryId) && kinds.includes(c.kind));
+  const accs = M.accounts().filter(a => !a.archived || a.id === sc.accountId);
+  const owner = M.ownerId();
+  // lo que ya se registró desde este programado
+  const done = M.sortTx(db.all('tx').filter(t => t.scheduleId === sc.id)).slice(0, 6);
   formModal({
-    title: 'Programado', value: { ...sc, end: sc.end || '', every: String(sc.every) },
+    title: sc.kind === 'in' ? 'Ingreso programado' : 'Gasto programado', value: { ...sc, end: sc.end || '', every: String(sc.every), accountId: sc.accountId || '', tag: sc.tag || '' },
     fields: [
       { key: 'desc', label: 'Descripción', type: 'text' },
+      { key: 'categoryId', label: 'Categoría', type: 'select', options: cats.map(c => ({ v: c.id, l: (c.icon ? c.icon + ' ' : '') + c.name })) },
+      ...(sc.paidBy === owner || !sc.paidBy ? [{ key: 'accountId', label: 'Cuenta', type: 'select', options: [...accs.map(a => ({ v: a.id, l: `${a.name} (${a.currency})` })), { v: '', l: 'Sin cuenta' }] }] : []),
+      { key: 'tag', label: 'Etiqueta (opcional)', type: 'text' },
       ...(ufOk ? [{ key: 'uf', label: 'Monto fijo en UF (opcional)', type: 'number', hint: 'Cada vez se registra con la UF de ese día. Vacío: monto fijo en pesos.' }] : []),
       { key: 'amount', label: `Monto (${sc.currency})`, type: 'number', required: true, show: (v) => !v.uf },
       { key: 'day', label: 'Día del mes', type: 'number', required: true },
       { key: 'every', label: 'Se repite', type: 'select', options: M.EVERY.map(([v, l]) => ({ v: String(v), l })) },
       { key: 'end', label: 'Hasta (AAAA-MM, opcional)', type: 'month' },
     ],
-    extra: h('p', { class: 'muted small' }, `${(M.category(sc.categoryId) || {}).name || ''}${sc.tag ? ` · #${sc.tag}` : ''}. Para cambiar la categoría o la cuenta, elimínalo y créalo de nuevo desde un movimiento (🔁 Repetir). Lo ya registrado no cambia.`),
+    extra: h('div', null,
+      h('p', { class: 'muted small' }, 'Los cambios valen para los próximos; lo ya registrado no cambia.'),
+      done.length ? h('div', { class: 'field' }, h('span', null, 'Últimos registrados'),
+        done.map(t => h('div', { class: 'sched-done' }, h('span', null, new Date(t.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' })), h('span', null, M.fmt(t.amount, t.currency))))) : null),
     onSave: async (v) => {
       const day = Math.round(v.day);
       if (!(day >= 1 && day <= 31)) { toast('El día va de 1 a 31'); return false; }
       if (v.end && !/^\d{4}-\d{2}$/.test(v.end)) { toast('Hasta: usa AAAA-MM'); return false; }
-      const out = { ...db.get('schedules', sc.id), desc: v.desc, day, every: Number(v.every), end: v.end || null };
+      const out = { ...db.get('schedules', sc.id), desc: v.desc, day, every: Number(v.every), end: v.end || null, categoryId: v.categoryId };
+      if (v.tag) out.tag = v.tag.trim(); else delete out.tag;
+      // la cuenta define la moneda del movimiento
+      if ('accountId' in v) { out.accountId = v.accountId || null; const a = out.accountId && M.account(out.accountId); if (a) out.currency = a.currency; }
+      // la categoría trae su reparto (un gasto compartido sigue compartido)
+      const cat = M.category(out.categoryId);
+      if (cat && cat.id !== sc.categoryId) out.alloc = cat.defaultAlloc === 'shared' ? 'shared' : (cat.defaultAlloc && cat.defaultAlloc.startsWith('p:') ? cat.defaultAlloc : 'none');
       if (v.uf) out.uf = v.uf; else { delete out.uf; out.amount = Math.abs(v.amount); }
       await db.put('schedules', out);
       toast('Programado guardado');
@@ -99,6 +116,7 @@ export function renderSchedules(root, back) {
             ended ? 'terminado' : `próximo: ${fmtDay(next.date)}${next.date < today ? ' (sin confirmar)' : ''}`,
             s.end ? `hasta ${M.monthName(s.end).toLowerCase()}` : null,
           ].filter(Boolean).join(' · '))),
-        h('div', { class: 'amt' }, `${s.kind === 'in' ? '+' : '-'}${amountText(s, next && next.date)}`));
+        h('div', { class: 'amt' }, h('div', null, `${s.kind === 'in' ? '+' : '-'}${M.fmt(M.scheduleAmount(s, (next && next.date) || today), s.currency)}`),
+          s.uf ? h('div', { class: 'sub' }, `${numText(s.uf)} UF`) : null));
     })) : h('p', { class: 'empty' }, 'Aún no hay programados. Al registrar un movimiento, toca 🔁 Repetir; o elige una fecha futura.'));
 }
