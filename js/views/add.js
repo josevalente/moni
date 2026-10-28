@@ -221,6 +221,17 @@ export function openTxForm(existing, defaults = {}) {
   // repetir: día del mes, hasta cuándo y, si se quiere, el monto fijado en UF
   const repDayIn = h('input', { type: 'text', inputmode: 'numeric', 'aria-label': 'Día del mes', placeholder: 'día' });
   const repEndIn = h('input', { type: 'month', 'aria-label': 'Hasta (opcional)' });
+  // lo escrito en los campos de Repetir (se lee al escribir y otra vez al guardar)
+  const readRepeat = () => {
+    if (!s.repeat) return;
+    const d = Math.round(Number(String(repDayIn.value).trim()));
+    if (d >= 1 && d <= 31) s.repeat.day = d;
+    s.repeat.end = repEndIn.value || '';
+  };
+  for (const ev of ['input', 'change']) {
+    repDayIn.addEventListener(ev, () => { readRepeat(); updateSummaryLabels(); });
+    repEndIn.addEventListener(ev, readRepeat);
+  }
 
   // ---- sugerencias por descripción
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
@@ -736,6 +747,7 @@ export function openTxForm(existing, defaults = {}) {
     // desde un programado (Pendientes): queda confirmado ese mes
     if (!isEdit && s.scheduleId) { tx.scheduleId = s.scheduleId; tx.scheduleMonth = s.scheduleMonth; }
     const before = isEdit ? { ...existing } : null;
+    readRepeat();
     const future = canRepeat() && s.date > today;
     const rep = canRepeat() && s.repeat && s.repeat.every ? s.repeat : null;
     if (future || rep) {

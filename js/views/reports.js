@@ -250,18 +250,31 @@ export function openCategoryDetail({ catId = null, group = null, kind = 'expense
       type: 'button', class: ds.period === v ? 'on' : '', 'aria-pressed': String(ds.period === v), onclick: () => { ds.period = v; ds.month = null; ds.desc = null; ds.limit = 80; draw(); },
     }, l)));
     const catNow = catId ? M.category(catId) : null;
+    // dividendo de un crédito: solo los intereses y seguros son gasto; la amortización abona a la deuda (patrimonio).
+    // Los movimientos muestran el dividendo completo, por eso no calzan con el gráfico sin esta explicación.
+    const isDebt = !!(catNow && catNow.debtId && kind === 'expense');
+    const paid = isDebt ? allTxs.reduce((a, t) => a + M.txBase(t) * (t.kind === 'in' ? -1 : 1), 0) : 0;
+    const asExpense = isDebt ? allTxs.reduce((a, t) => a + M.txBase(t) * M.expenseFactor(t, catNow) * (t.kind === 'in' ? -1 : 1), 0) : 0;
+    const debtNote = isDebt && paid > 0 ? h('p', { class: 'muted small' },
+      `Del dividendo solo los intereses y seguros son gasto: es lo que muestran el gráfico y los promedios${mode === 'mine' ? ' (en tu parte)' : ''}. `
+      + `${sel >= 0 ? `En ${M.monthName(months[sel]).toLowerCase()}` : 'En el período'} pagaste ${M.fmt(paid, base)}: ${M.fmt(paid - asExpense, base)} de amortización (abona a la deuda y suma a tu patrimonio) `
+      + `y ${M.fmt(asExpense, base)} de intereses y seguros. Los movimientos de abajo muestran el dividendo completo.`) : null;
     fill(body,
       h('div', { class: 'filters' }, periodSeg,
         // p. ej. una compra puntual de un activo marcada como gasto: cambiar su naturaleza la saca de los reportes
         catNow ? h('button', { class: 'btn small', type: 'button', onclick: () => editCategory(catNow) }, 'Editar categoría') : null),
       catNow && catNow.kind !== kind ? h('p', { class: 'warn' }, `Esta categoría ahora es de tipo "${({ expense: 'Gasto', income: 'Ingreso', loan: 'Préstamo', invest: 'Inversión', adjust: 'Ajuste' })[catNow.kind]}" y ya no entra en los reportes de ${kind === 'expense' ? 'gastos' : 'ingresos'}.`) : null,
       statTiles([
-        { label: 'Promedio mensual', value: M.fmt(avg, base) },
+        { label: isDebt ? 'Promedio mensual (intereses y seguros)' : 'Promedio mensual', value: M.fmt(avg, base) },
         { label: ds.period === 'all' ? `Total desde ${M.monthName(months[0]).toLowerCase()}` : `Total ${months.length} meses`, value: M.fmt(total, base) },
-        lastClosed ? { label: M.monthName(lastClosed), value: M.fmt(lastVal, base), delta: avg ? `${signed(pct(lastVal, avg))} vs promedio` : null, tone: lastVal > avg ? (isExp ? 'up-bad' : 'up-good') : (isExp ? 'down-good' : 'down-bad') } : null,
+        // casi igual al promedio (menos de 0,5%): sin flecha ni color, en vez de "▼ 0%"
+        lastClosed ? (avg && Math.abs(lastVal / avg - 1) < 0.005
+          ? { label: M.monthName(lastClosed), value: M.fmt(lastVal, base), delta: 'igual al promedio' }
+          : { label: M.monthName(lastClosed), value: M.fmt(lastVal, base), delta: avg ? `${signed(pct(lastVal, avg))} vs promedio` : null, tone: lastVal > avg ? (isExp ? 'up-bad' : 'up-good') : (isExp ? 'down-good' : 'down-bad') }) : null,
       ]),
+      debtNote,
       vizCard({
-        title: 'Por mes',
+        title: isDebt ? 'Intereses y seguros por mes' : 'Por mes',
         subtitle: sel >= 0 ? `Mostrando ${M.monthName(months[sel])} · toca de nuevo para ver todo` : 'Toca un mes para ver sus movimientos',
         chart: columnChart({
           items, cur: base, reference: avg || null, highlight: sel,
