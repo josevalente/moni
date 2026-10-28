@@ -110,7 +110,8 @@ export function modal(title, body, { actions, wide, onClose, dismissable = true 
   const vv = window.visualViewport;
   // con el teclado abierto iOS no achica la pantalla: se ajusta al área visible para que el pie
   // (Guardar) quede sobre el teclado
-  const fit = () => { if (vv) { back.style.height = vv.height + 'px'; back.style.top = vv.offsetTop + 'px'; } };
+  // con el teclado abierto (área visible bastante más baja que la ventana) el pie se compacta
+  const fit = () => { if (vv) { back.style.height = vv.height + 'px'; back.style.top = vv.offsetTop + 'px'; back.classList.toggle('kb', vv.height < window.innerHeight * 0.8); } };
   let closed = false;
   const onKey = (e) => { if (e.key === 'Escape' && dismissable && [...document.querySelectorAll('.backdrop')].at(-1) === back) close(); };
   const close = () => {
