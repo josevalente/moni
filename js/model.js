@@ -933,24 +933,48 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   const debtCats = new Set(db.all('categories').filter(c => c.debtId).map(c => c.id));
   const sp = closed.map(ym => spendingByCategory(ym, 'mine', owner));
   const sumOf = (r, f) => r.rows.filter(x => f(x.cat)).reduce((a, x) => a + x.v, 0);
-  const dedSeries = sp.map(r => sumOf(r, isPayrollDeduction));
-  // gasto: sin los dividendos (van exactos aparte) ni los descuentos del sueldo (el ingreso ya es líquido);
-  // los aportes a inversiones sí quedan: también salen de la cuenta
   // programados (sin los de un crédito: sus dividendos ya van exactos) y arriendo que ya se recibe: se
   // proyectan tal cual y su historial sale de los promedios (si no, se contarían dos veces)
   // (uno de una sola vez se suma, sin sacar su categoría de los promedios)
   const sched = schedules().filter(x => { const c = category(x.categoryId); return c && !c.debtId; });
   const schedIds = new Set(sched.map(x => x.id));
-  const schedCats = new Set(sched.filter(x => x.every && (!x.end || x.end >= cur)).map(x => x.categoryId));
+  const recurring = sched.filter(x => x.every && (!x.end || x.end >= cur));
+  const schedCats = new Set(recurring.map(x => x.categoryId));
+  // cuánto cubren los programados de cada categoría (en pesos de hoy y en tu parte): de su historial solo se
+  // saca hasta ese monto cada mes, y lo demás de la categoría sigue en los promedios (ej. "Ingreso" programa la
+  // colación pero también recibe devoluciones)
+  const ufToday = rateFor('UF', todayStr()) || 1;
+  const covers = { in: new Map(), out: new Map() };
+  for (const x of recurring) {
+    const v = x.uf ? x.uf * ufToday : x.amount * (rateFor(x.currency, todayStr()) ?? 1);
+    const m = covers[x.kind === 'in' ? 'in' : 'out'];
+    m.set(x.categoryId, (m.get(x.categoryId) || 0) + scheduleOwnerAmount(x, cur, v));
+  }
+  const covered = (r, c) => Math.min(Math.max(0, r.v), covers.out.get(c.id) || 0);
+  // descuentos del sueldo que no cubre un programado (los programados ya restan en su fecha)
+  const dedSeries = sp.map(r => r.rows.filter(x => isPayrollDeduction(x.cat)).reduce((a, x) => a + x.v - covered(x, x.cat), 0));
+  const isDed = isPayrollDeduction;
+  // gasto: sin los dividendos (van exactos aparte) ni los descuentos del sueldo (el ingreso ya es líquido);
+  // los aportes a inversiones sí quedan: también salen de la cuenta
   const rentIn = rentReceived(schedCats);
-  const outOfBase = new Set([...schedCats, ...rentIn.cats]);
-  const incOut = (ym) => txsInMonth(ym).filter(t => t.kind === 'in' && t.paidBy === owner && outOfBase.has(t.categoryId) && (category(t.categoryId) || {}).kind === 'income').reduce((a, t) => a + txBase(t), 0);
-  const schedSpent = (r) => sumOf(r, c => schedCats.has(c.id) && !debtCats.has(c.id) && !isPayrollDeduction(c));
+  const incOut = (ym) => {
+    const per = new Map();
+    for (const t of txsInMonth(ym)) {
+      if (t.kind !== 'in' || t.paidBy !== owner || (category(t.categoryId) || {}).kind !== 'income') continue;
+      per.set(t.categoryId, (per.get(t.categoryId) || 0) + txBase(t));
+    }
+    let out = 0;
+    for (const [cid, v] of per) out += rentIn.cats.has(cid) ? v : Math.min(v, covers.in.get(cid) || 0);
+    return out;
+  };
+  const schedSpent = (r) => r.rows.filter(x => !debtCats.has(x.cat.id)).reduce((a, x) => a + covered(x, x.cat), 0);
   const ownSpend = (i) => sp[i].total - sumOf(sp[i], c => debtCats.has(c.id)) - dedSeries[i] - schedSpent(sp[i]);
   const incSeries = closed.map((ym, i) => incomeOfMonth(ym, owner, { extraordinary: false }) - incOut(ym) - dedSeries[i]);
   const incomeBase = median(incSeries);
   const lumps = new Map();
-  closed.forEach((ym, i) => { const extra = incSeries[i] - incomeBase; if (extra > Math.max(incomeBase, 1)) lumps.set(ym.slice(5), extra); });
+  // un ingreso anual (bono, reparto de utilidades): más que un mes típico completo, contando lo programado
+  const typicalIncome = incomeBase + [...covers.in.values()].reduce((a, v) => a + v, 0);
+  closed.forEach((ym, i) => { const extra = incSeries[i] - incomeBase; if (extra > Math.max(typicalIncome, 1)) lumps.set(ym.slice(5), extra); });
   const spendAvg = closed.reduce((a, ym, i) => a + ownSpend(i), 0) / closed.length;
   const spendBase = Number.isFinite(spendOverride) && spendOverride >= 0 ? spendOverride : spendAvg;
   const deductions = median(dedSeries);
@@ -986,7 +1010,7 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   // típico que falta (sin bajar de cero) y los dividendos que vencen desde hoy hasta fin de mes
   {
     const spNow = spendingByCategory(cur, 'mine', owner);
-    const dedNow = sumOf(spNow, isPayrollDeduction);
+    const dedNow = spNow.rows.filter(x => isDed(x.cat)).reduce((a, x) => a + x.v - covered(x, x.cat), 0);
     const incNow = incomeOfMonth(cur, owner, { extraordinary: false }) - incOut(cur) - dedNow;
     const spentNow = spNow.total - sumOf(spNow, c => debtCats.has(c.id)) - dedNow - schedSpent(spNow);
     const lump = lumps.get(cur.slice(5)) || 0;
@@ -1718,11 +1742,46 @@ export const EVERY = [[0, 'Una vez'], [1, 'Cada mes'], [2, 'Cada 2 meses'], [3, 
 export const everyLabel = (n) => (EVERY.find(e => e[0] === n) || [0, `Cada ${n} meses`])[1];
 export const schedules = () => db.all('schedules').filter(s => !s.archived);
 const monthDiff = (a, b) => (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5, 7)) - Number(a.slice(5, 7));
+// Feriados de Chile (para contar días hábiles): los fijos, Viernes y Sábado Santo, los que la ley mueve al lunes
+// (San Pedro y San Pablo, Encuentro de Dos Mundos) o al viernes (Iglesias Evangélicas), y el 31 de diciembre,
+// feriado bancario (no se hacen depósitos). Los feriados por única vez (elecciones, leyes especiales) no están.
+const holidayCache = new Map();
+export function holidaysCL(y) {
+  if (holidayCache.has(y)) return holidayCache.get(y);
+  const out = new Set();
+  const iso = (m, d) => new Date(Date.UTC(y, m - 1, d)).toISOString().slice(0, 10);
+  const wdOf = (m, d) => new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  for (const [m, d] of [[1, 1], [5, 1], [5, 21], [7, 16], [8, 15], [9, 18], [9, 19], [11, 1], [12, 8], [12, 25], [12, 31]]) out.add(iso(m, d));
+  // al lunes más cercano: martes o miércoles, al anterior; jueves o viernes, al siguiente (Ley 19.668)
+  for (const [m, d] of [[6, 29], [10, 12]]) { const w = wdOf(m, d); out.add(iso(m, d + (w === 2 ? -1 : w === 3 ? -2 : w === 4 ? 4 : w === 5 ? 3 : 0))); }
+  { const w = wdOf(10, 31); out.add(iso(10, 31 + (w === 2 ? -4 : w === 3 ? 2 : 0))); }      // martes: viernes antes; miércoles: viernes después
+  // Pascua (algoritmo de Meeus): Viernes y Sábado Santo
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const hh = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - hh - k) % 7, mm = Math.floor((a + 11 * hh + 22 * l) / 451);
+  const em = Math.floor((hh + l - 7 * mm + 114) / 31), ed = ((hh + l - 7 * mm + 114) % 31) + 1;
+  out.add(iso(em, ed - 2)); out.add(iso(em, ed - 1));
+  holidayCache.set(y, out);
+  return out;
+}
+// días hábiles del mes (lunes a viernes, sin feriados)
+export function businessDays(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const hol = holidaysCL(y), out = [];
+  for (let d = 1; d <= Number(monthEnd(ym).slice(8)); d++) {
+    const w = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    if (w && w !== 6 && !hol.has(`${ym}-${String(d).padStart(2, '0')}`)) out.push(d);
+  }
+  return out;
+}
+
 // Cuándo cae en el mes: un día fijo (si el mes es más corto, ej. día 31 en febrero, el último día) o un día de
-// la semana contado desde el inicio o el final del mes (`nth`: { n: 1..4 o -1 último, -2 penúltimo; wd: 0 domingo..6 })
+// la semana contado desde el inicio o el final del mes (`nth`: { n: 1..4 o -1 último, -2 penúltimo; wd: 0 domingo..6,
+// o 'h' día hábil })
 export const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 export const NTHS = [[1, 'Primer'], [2, 'Segundo'], [3, 'Tercer'], [4, 'Cuarto'], [-2, 'Penúltimo'], [-1, 'Último']];
+const wdName = (wd) => (wd === 'h' ? 'día hábil' : WEEKDAYS[wd]);
 export function nthWeekday(ym, n, wd) {
+  if (wd === 'h') { const b = businessDays(ym); return b[n > 0 ? n - 1 : b.length + n]; }
   const [y, m] = ym.split('-').map(Number);
   const days = Number(monthEnd(ym).slice(8));
   if (n > 0) {
@@ -1737,7 +1796,7 @@ export const scheduleDate = (s, ym) => {
   return `${ym}-${String(d).padStart(2, '0')}`;
 };
 // "día 5" o "primer lunes"
-export const scheduleWhen = (s) => (s.nth ? `${(NTHS.find(x => x[0] === s.nth.n) || [0, ''])[1].toLowerCase()} ${WEEKDAYS[s.nth.wd]}` : `día ${s.day}`);
+export const scheduleWhen = (s) => (s.nth ? `${(NTHS.find(x => x[0] === s.nth.n) || [0, ''])[1].toLowerCase()} ${wdName(s.nth.wd)}` : `día ${s.day}`);
 // el n-ésimo día de la semana que corresponde a una fecha (para proponerlo): el 27-oct-2026 es el último martes
 export function nthOfDate(date) {
   const ym = date.slice(0, 7), d = Number(date.slice(8));

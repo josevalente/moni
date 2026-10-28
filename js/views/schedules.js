@@ -66,10 +66,10 @@ export function editSchedule(sc) {
       { key: 'tag', label: 'Etiqueta (opcional)', type: 'text' },
       ...(ufOk ? [{ key: 'uf', label: 'Monto fijo en UF (opcional)', type: 'number', calc: true, hint: 'Acepta operaciones, ej. 8,5 × 1,19. Cada vez se registra con la UF de ese día. Vacío: monto fijo en pesos.' }] : []),
       { key: 'amount', label: `Monto (${sc.currency})`, type: 'number', calc: true, required: true, show: (v) => !v.uf },
-      { key: 'mode', label: 'Qué día', type: 'select', options: [{ v: 'day', l: 'Un día del mes' }, { v: 'week', l: 'Un día de la semana (ej. primer lunes)' }] },
+      { key: 'mode', label: 'Qué día', type: 'select', options: [{ v: 'day', l: 'Un día del mes' }, { v: 'week', l: 'Un día de la semana o hábil (ej. primer lunes, último día hábil)' }] },
       { key: 'day', label: 'Día del mes', type: 'number', required: true, show: (v) => v.mode !== 'week', hint: 'Con 31, el último día de cada mes.' },
       { key: 'nthN', label: 'Cuál', type: 'select', options: M.NTHS.map(([v, l]) => ({ v: String(v), l })), show: (v) => v.mode === 'week' },
-      { key: 'nthWd', label: 'Día de la semana', type: 'select', options: [1, 2, 3, 4, 5, 6, 0].map(v => ({ v: String(v), l: M.WEEKDAYS[v] })), show: (v) => v.mode === 'week' },
+      { key: 'nthWd', label: 'Día de la semana', type: 'select', options: [...[1, 2, 3, 4, 5, 6, 0].map(v => ({ v: String(v), l: M.WEEKDAYS[v] })), { v: 'h', l: 'día hábil (lunes a viernes sin feriados)' }], show: (v) => v.mode === 'week' },
       { key: 'every', label: 'Se repite', type: 'select', options: M.EVERY.map(([v, l]) => ({ v: String(v), l })) },
       { key: 'end', label: 'Hasta (AAAA-MM, opcional)', type: 'month' },
     ],
@@ -83,7 +83,7 @@ export function editSchedule(sc) {
       if (!(day >= 1 && day <= 31)) { toast('El día va de 1 a 31'); return false; }
       if (v.end && !/^\d{4}-\d{2}$/.test(v.end)) { toast('Hasta: usa AAAA-MM'); return false; }
       const out = { ...db.get('schedules', sc.id), desc: v.desc, day, every: Number(v.every), end: v.end || null, categoryId: v.categoryId };
-      if (week) out.nth = { n: Number(v.nthN), wd: Number(v.nthWd) }; else delete out.nth;
+      if (week) out.nth = { n: Number(v.nthN), wd: v.nthWd === 'h' ? 'h' : Number(v.nthWd) }; else delete out.nth;
       if (v.tag) out.tag = v.tag.trim(); else delete out.tag;
       // la cuenta define la moneda del movimiento
       if ('accountId' in v) { out.accountId = v.accountId || null; const a = out.accountId && M.account(out.accountId); if (a) out.currency = a.currency; }

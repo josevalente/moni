@@ -221,14 +221,15 @@ export function openTxForm(existing, defaults = {}) {
   // repetir: un día del mes (ej. el 5) o un día de la semana (ej. el primer lunes), y hasta cuándo
   const repDayIn = h('input', { type: 'text', inputmode: 'numeric', 'aria-label': 'Día del mes', placeholder: 'día' });
   const repNthSel = h('select', { 'aria-label': 'Cuál' }, M.NTHS.map(([v, l]) => h('option', { value: String(v) }, l)));
-  const repWdSel = h('select', { 'aria-label': 'Día de la semana' }, [1, 2, 3, 4, 5, 6, 0].map(v => h('option', { value: String(v) }, M.WEEKDAYS[v])));
+  const repWdSel = h('select', { 'aria-label': 'Día de la semana' }, [1, 2, 3, 4, 5, 6, 0].map(v => h('option', { value: String(v) }, M.WEEKDAYS[v])),
+    h('option', { value: 'h' }, 'día hábil'));            // lunes a viernes sin feriados de Chile
   const repEndIn = h('input', { type: 'month', 'aria-label': 'Hasta (opcional)' });
   // lo elegido en los campos de Repetir (se lee al cambiar y otra vez al guardar)
   const readRepeat = () => {
     if (!s.repeat) return;
     const d = Math.round(Number(String(repDayIn.value).trim()));
     if (d >= 1 && d <= 31) s.repeat.day = d;
-    s.repeat.nth = { n: Number(repNthSel.value), wd: Number(repWdSel.value) };
+    s.repeat.nth = { n: Number(repNthSel.value), wd: repWdSel.value === 'h' ? 'h' : Number(repWdSel.value) };
     s.repeat.end = repEndIn.value || '';
   };
   for (const ev of ['input', 'change']) {
@@ -699,7 +700,7 @@ export function openTxForm(existing, defaults = {}) {
         const week = s.repeat && s.repeat.mode === 'week';
         parts.push(h('div', { class: 'sum-editor' },
           seg(opts, String(s.repeat ? s.repeat.every : 0), pick, 'Repetir cada'),
-          s.repeat ? seg([{ v: 'day', l: 'Un día del mes' }, { v: 'week', l: 'Un día de la semana' }], s.repeat.mode, (v) => { s.repeat.mode = v; render(); }, 'Qué día') : null,
+          s.repeat ? seg([{ v: 'day', l: 'Un día del mes' }, { v: 'week', l: 'Día de la semana o hábil' }], s.repeat.mode, (v) => { s.repeat.mode = v; render(); }, 'Qué día') : null,
           s.repeat ? h('div', { class: 'rep-fields' + (week ? ' three' : '') },
             week ? [h('label', { class: 'fc-field' }, h('span', null, 'Cuál'), repNthSel), h('label', { class: 'fc-field' }, h('span', null, 'Día'), repWdSel)]
               : h('label', { class: 'fc-field' }, h('span', null, 'Día del mes'), repDayIn),
