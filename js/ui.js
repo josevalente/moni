@@ -131,7 +131,9 @@ export function modal(title, body, { actions, wide, onClose, dismissable = true 
       h('button', { class: 'icon-btn', 'aria-label': 'Cerrar', onclick: close }, '✕')),
     h('div', { class: 'sheet-body' }, body),
     actions ? h('footer', null, actions) : null);
-  if (dismissable) back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
+  // tocar el fondo cierra; no el mismo toque que la abrió (ej. un segundo toque en un botón que justo la abre)
+  const openedAt = Date.now();
+  if (dismissable) back.addEventListener('mousedown', (e) => { if (e.target === back && Date.now() - openedAt > 400) close(); });
   document.addEventListener('keydown', onKey);
   back.append(sheet);
   document.body.append(back);

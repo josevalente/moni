@@ -247,22 +247,36 @@ export function openTxForm(existing, defaults = {}) {
   // ---- sugerencias por descripción
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
   // ---- pegar: una compra del atajo de Apple Pay, el texto de un comprobante o la captura de uno
+  // un solo pegado a la vez: un segundo toque mientras está el globo "Pegar" del iPhone no abre nada más
+  let pasting = false;
   async function pasteAny() {
+    if (pasting) return;
+    pasting = true;
+    try { await pasteOnce(); } finally { pasting = false; }
+  }
+  // tocar fuera del globo "Pegar" es cancelar (el navegador responde NotAllowedError): no se abre nada
+  const cancelled = (e) => e && e.name === 'NotAllowedError';
+  async function pasteOnce() {
     // camino rápido: leer lo copiado (en el iPhone aparece el globo "Pegar" para permitirlo)
     if (navigator.clipboard && navigator.clipboard.read) {
-      try {
-        const items = await navigator.clipboard.read();
-        for (const it of items) {
-          const type = it.types.find(t => /image|png|jpe?g|heic|heif|tiff|gif|webp/i.test(t));
-          if (type) return readReceiptImage(await it.getType(type));
-        }
-        for (const it of items) if (it.types.includes('text/plain')) { const t = await (await it.getType('text/plain')).text(); if (t.trim()) return applyText(t); }
-      } catch { /* algunos navegadores solo permiten leer texto */ }
+      let items = null;
+      try { items = await navigator.clipboard.read(); } catch (e) { if (cancelled(e)) return; /* otros navegadores solo leen texto */ }
+      if (items) {
+        try {
+          for (const it of items) {
+            const type = it.types.find(t => /image|png|jpe?g|heic|heif|tiff|gif|webp/i.test(t));
+            if (type) return readReceiptImage(await it.getType(type));
+          }
+          for (const it of items) if (it.types.includes('text/plain')) { const t = await (await it.getType('text/plain')).text(); if (t.trim()) return applyText(t); }
+        } catch { /* no se pudo leer su contenido */ }
+        // lo permitiste pero no llegó nada usable (el iPhone no siempre entrega una foto a un botón)
+        return openPasteZone();
+      }
     }
     let text = '';
-    try { text = await navigator.clipboard.readText(); } catch { /* sin permiso o sin texto */ }
+    try { text = await navigator.clipboard.readText(); } catch (e) { if (cancelled(e)) return; }
     if (String(text).trim()) return applyText(text);
-    // el iPhone no siempre entrega una foto copiada a un botón: se pega a mano en un recuadro
+    // sin acceso a lo copiado: se pega a mano en un recuadro
     openPasteZone();
   }
   // Recuadro para pegar con el gesto del teléfono (mantener presionado › Pegar), que sí entrega la imagen.
