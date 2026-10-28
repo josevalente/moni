@@ -58,14 +58,20 @@ export function editSchedule(sc) {
   formModal({
     title: sc.kind === 'in' ? 'Ingreso programado' : 'Gasto programado',
     value: { ...sc, end: sc.end || '', every: String(sc.every), accountId: sc.accountId || '', tag: sc.tag || '',
+      payroll: sc.payroll || '', calcType: (sc.calc || {}).type || '', calcPct: (sc.calc || {}).pct ?? null, calcPlanUF: (sc.calc || {}).planUF ?? null,
       mode: sc.nth ? 'week' : 'day', nthN: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).n), nthWd: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).wd) },
     fields: [
       { key: 'desc', label: 'Descripción', type: 'text' },
       { key: 'categoryId', label: 'Categoría', type: 'select', options: cats.map(c => ({ v: c.id, l: (c.icon ? c.icon + ' ' : '') + c.name })) },
       ...(sc.paidBy === owner || !sc.paidBy ? [{ key: 'accountId', label: 'Cuenta', type: 'select', options: [...accs.map(a => ({ v: a.id, l: `${a.name} (${a.currency})` })), { v: '', l: 'Sin cuenta' }] }] : []),
       { key: 'tag', label: 'Etiqueta (opcional)', type: 'text' },
-      ...(ufOk ? [{ key: 'uf', label: 'Monto fijo en UF (opcional)', type: 'number', calc: true, hint: 'Acepta operaciones, ej. 8,5 × 1,19. Cada vez se registra con la UF de ese día. Vacío: monto fijo en pesos.' }] : []),
-      { key: 'amount', label: `Monto (${sc.currency})`, type: 'number', calc: true, required: true, show: (v) => !v.uf },
+      // del sueldo: un haber se marca imponible o no; un descuento legal se calcula sobre lo imponible del mes
+      ...(sc.kind === 'in' ? [{ key: 'payroll', label: 'En la liquidación de sueldo', type: 'select', options: [{ v: '', l: 'No es parte del sueldo' }, { v: 'imp', l: 'Haber imponible (sueldo, gratificación, bonos)' }, { v: 'noimp', l: 'Haber no imponible (colación, movilización)' }] }]
+        : [{ key: 'calcType', label: 'Monto', type: 'select', options: [{ v: '', l: 'Fijo (o en UF)' }, ...M.CALC.map(([v, l]) => ({ v, l: `Calculado · ${l}` }))], hint: 'Calculado: cada mes sobre los haberes imponibles programados del sueldo.' },
+          { key: 'calcPct', label: 'Porcentaje', type: 'number', show: (v) => v.calcType === 'afp' || v.calcType === 'cesantia', hint: 'AFP: la tasa de la tuya, ej. 11,44. Seguro de cesantía: 0,6 con contrato indefinido.' },
+          { key: 'calcPlanUF', label: 'Plan de la Isapre (UF al mes)', type: 'number', show: (v) => v.calcType === 'salud', hint: 'Se descuenta el mayor entre el 7% de lo imponible y el plan. En Fonasa, déjalo vacío.' }]),
+      ...(ufOk ? [{ key: 'uf', label: 'Monto fijo en UF (opcional)', type: 'number', calc: true, show: (v) => !v.calcType, hint: 'Acepta operaciones, ej. 8,5 × 1,19. Cada vez se registra con la UF de ese día. Vacío: monto fijo en pesos.' }] : []),
+      { key: 'amount', label: `Monto (${sc.currency})`, type: 'number', calc: true, required: true, show: (v) => !v.uf && !v.calcType },
       { key: 'mode', label: 'Qué día', type: 'select', options: [{ v: 'day', l: 'Un día del mes' }, { v: 'week', l: 'Un día de la semana o hábil (ej. primer lunes, último día hábil)' }] },
       { key: 'day', label: 'Día del mes', type: 'number', required: true, show: (v) => v.mode !== 'week', hint: 'Con 31, el último día de cada mes.' },
       { key: 'nthN', label: 'Cuál', type: 'select', options: M.NTHS.map(([v, l]) => ({ v: String(v), l })), show: (v) => v.mode === 'week' },
@@ -90,7 +96,15 @@ export function editSchedule(sc) {
       // la categoría trae su reparto (un gasto compartido sigue compartido)
       const cat = M.category(out.categoryId);
       if (cat && cat.id !== sc.categoryId) out.alloc = cat.defaultAlloc === 'shared' ? 'shared' : (cat.defaultAlloc && cat.defaultAlloc.startsWith('p:') ? cat.defaultAlloc : 'none');
-      if (v.uf) out.uf = v.uf; else { delete out.uf; out.amount = Math.abs(v.amount); }
+      if (v.payroll) out.payroll = v.payroll; else delete out.payroll;
+      if (v.calcType) {
+        if ((v.calcType === 'afp' || v.calcType === 'cesantia') && !(v.calcPct > 0)) { toast('Falta el porcentaje'); return false; }
+        out.calc = { type: v.calcType, ...(v.calcPct > 0 ? { pct: v.calcPct } : {}), ...(v.calcType === 'salud' && v.calcPlanUF > 0 ? { planUF: v.calcPlanUF } : {}) };
+        delete out.uf;
+      } else {
+        delete out.calc;
+        if (v.uf) out.uf = v.uf; else { delete out.uf; out.amount = Math.abs(v.amount); }
+      }
       await db.put('schedules', out);
       toast('Programado guardado');
     },
@@ -99,6 +113,102 @@ export function editSchedule(sc) {
       await db.del('schedules', sc.id);
       toast('Programado eliminado (lo ya registrado se mantiene)', { label: 'Deshacer', onAction: () => db.put('schedules', copy) });
     },
+  });
+}
+
+// Liquidación de un mes: los haberes programados (se ajustan o se agregan, ej. un aguinaldo) y los descuentos
+// legales calculados al momento sobre lo imponible; se registra todo junto, con un solo "Deshacer".
+export async function openPayroll(ym) {
+  const base = M.base();
+  let p = M.payrollFor(ym);
+  if (!p.haberes.length && !p.deds.length) { toast('No hay programados del sueldo este mes'); return; }
+  const date = M.scheduleDate((p.haberes[0] || p.deds[0]).s, ym);
+  // la UTM del mes (para el impuesto): si no está guardada, se consulta
+  if (!M.rateFor('UTM', date) && navigator.onLine !== false) { await Promise.race([FX.refreshRates({ force: true }).catch(() => {}), new Promise(r => setTimeout(r, 4000))]); p = M.payrollFor(ym); }
+  const done = new Map(db.all('tx').filter(t => t.scheduleId && t.scheduleMonth === ym).map(t => [t.scheduleId, t]));
+  const first = (p.haberes[0] || p.deds[0]).s;
+  const incomeCats = M.categories().filter(c => !c.archived && c.kind === 'income');
+  const expCats = M.categories().filter(c => !c.archived && (c.kind === 'expense' || c.kind === 'invest'));
+  const catOf = (imp) => ((p.haberes.find(x => x.imponible === imp) || p.haberes[0] || {}).s || {}).categoryId || (incomeCats[0] || {}).id;
+  const otherDedCat = (expCats.find(c => /otros descuentos/i.test(c.name)) || expCats.find(c => M.isPayrollDeduction(c)) || expCats[0] || {}).id;
+  // líneas: haberes (los ya registrados, con su monto) y descuentos extra
+  const lines = p.haberes.map(x => ({ s: x.s, desc: x.s.desc, amount: done.has(x.s.id) ? done.get(x.s.id).amount : x.amount, imponible: x.imponible, categoryId: x.s.categoryId, done: done.has(x.s.id) }));
+  const extraDeds = [];
+  const box = h('div'), dedBox = h('div'), totals = h('div', { class: 'pay-total' });
+  const amountInput = (obj, key = 'amount') => {
+    const inp = h('input', { type: 'text', inputmode: 'decimal', value: numText(obj[key]), 'aria-label': 'Monto', disabled: obj.done || null });
+    inp.addEventListener('input', () => { const v = M.evalAmount(inp.value); obj[key] = Number.isFinite(v) ? Math.abs(v) : 0; recalc(); });
+    return inp;
+  };
+  const calc = () => M.payrollCalc(lines, p.deds.map(d => d.s), { uf: p.uf, utm: p.utm });
+  function recalc() {
+    const r = calc();
+    const dedAmt = (i) => (done.has(p.deds[i].s.id) ? done.get(p.deds[i].s.id).amount : r.amounts[i]);
+    fill(dedBox, p.deds.map((d, i) => h('div', { class: 'pay-row' }, h('span', null, d.s.desc || (M.category(d.s.categoryId) || {}).name, done.has(d.s.id) ? h('small', { class: 'muted' }, ' · ya registrado') : null), h('span', { class: 'r' }, M.fmt(-dedAmt(i), base)))));
+    const hab = lines.reduce((a, x) => a + (x.amount || 0), 0);
+    const ded = p.deds.reduce((a, d, i) => a + dedAmt(i), 0) + extraDeds.reduce((a, x) => a + (x.amount || 0), 0);
+    fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`), h('span', null, `UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
+      h('div', { class: 'pay-row strong' }, h('span', null, 'Líquido'), h('span', { class: 'r' }, M.fmt(hab - ded, base))));
+  }
+  function draw() {
+    fill(box,
+      h('h4', null, 'Haberes'),
+      lines.map(x => h('div', { class: 'pay-row' },
+        h('span', null, x.desc || (M.category(x.categoryId) || {}).name, h('small', { class: 'muted' }, x.imponible ? ' · imponible' : ' · no imponible'), x.done ? h('small', { class: 'muted' }, ' · ya registrado') : null),
+        amountInput(x))),
+      h('div', { class: 'actions' },
+        h('button', { type: 'button', class: 'btn small', onclick: () => addLine(true) }, '＋ Haber imponible (bono, aguinaldo)'),
+        h('button', { type: 'button', class: 'btn small', onclick: () => addLine(false) }, '＋ No imponible')),
+      h('h4', null, 'Descuentos (calculados)'), dedBox,
+      extraDeds.map(x => h('div', { class: 'pay-row' }, h('span', null, x.desc), amountInput(x))),
+      h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn small', onclick: addDed }, '＋ Otro descuento (ej. anticipo)')),
+      totals);
+    recalc();
+  }
+  const ask = (title, placeholder) => new Promise((resolve) => {
+    const d = h('input', { type: 'text', placeholder, autocapitalize: 'sentences' });
+    const q = modal(title, h('label', { class: 'field' }, h('span', null, 'Descripción'), d), {
+      // se responde antes de cerrar: al cerrar, onClose responde "cancelado" (y la primera respuesta es la que vale)
+      actions: [h('button', { class: 'btn', onclick: () => { resolve(null); q.close(); } }, 'Cancelar'),
+        h('button', { class: 'btn primary', onclick: () => { resolve(d.value.trim() || placeholder); q.close(); } }, 'Agregar')],
+      onClose: () => resolve(null),
+    });
+    setTimeout(() => d.focus(), 50);
+  });
+  async function addLine(imp) {
+    const desc = await ask(imp ? 'Haber imponible' : 'Haber no imponible', imp ? 'Aguinaldo' : 'Bono no imponible');
+    if (!desc) return;
+    lines.push({ s: null, desc, amount: 0, imponible: imp, categoryId: catOf(imp) });
+    draw();
+  }
+  async function addDed() {
+    const desc = await ask('Otro descuento', 'Anticipo');
+    if (!desc) return;
+    extraDeds.push({ desc, amount: 0, categoryId: otherDedCat });
+    draw();
+  }
+  draw();
+  const m = modal(`Liquidación de ${M.monthName(ym).toLowerCase()}`, h('div', null,
+    h('p', { class: 'muted small' }, `Ajusta los haberes o agrega uno (ej. un aguinaldo): los descuentos legales se recalculan como en la liquidación. Se registra el ${fmtDay(date)} en ${(M.account(first.accountId) || { name: 'sin cuenta' }).name}.`),
+    box), {
+    wide: true,
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'), h('span', { class: 'spacer' }),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const r = calc();
+        const mk = (o, extra) => ({ id: db.uid(), date, currency: base, accountId: first.accountId || null, paidBy: first.paidBy || M.ownerId(), alloc: 'none', ...o, ...extra });
+        const txs = [];
+        for (const x of lines) {
+          if (x.done || !(x.amount > 0)) continue;
+          txs.push(x.s ? { ...M.scheduleTx(x.s, ym), amount: x.amount } : mk({ kind: 'in', amount: x.amount, categoryId: x.categoryId, desc: x.desc }));
+        }
+        p.deds.forEach((d, i) => { if (!done.has(d.s.id) && r.amounts[i] > 0) txs.push({ ...M.scheduleTx(d.s, ym), amount: r.amounts[i] }); });
+        for (const x of extraDeds) if (x.amount > 0) txs.push(mk({ kind: 'out', amount: x.amount, categoryId: x.categoryId, desc: x.desc }));
+        // los programados del sueldo de este mes que quedaron en cero: se omiten (no se vuelven a pedir)
+        for (const x of lines) if (x.s && !x.done && !(x.amount > 0)) await M.skipOccurrence(x.s, ym);
+        await db.putMany('tx', txs);
+        m.close();
+        toast(`Liquidación registrada: ${txs.length} movimientos`, { label: 'Deshacer', onAction: () => db.delMany('tx', txs.map(t => t.id)), ms: 8000 });
+      } }, 'Registrar liquidación')],
   });
 }
 

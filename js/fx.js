@@ -5,7 +5,7 @@ import * as db from './db.js';
 import { addDays, base, lastRateDate, rateFor, timeoutSignal, todayStr } from './model.js';
 
 const API = 'https://mindicador.cl/api';
-const MAP = { USD: 'dolar', EUR: 'euro', UF: 'uf', MUSD: 'dolar' };
+const MAP = { USD: 'dolar', EUR: 'euro', UF: 'uf', MUSD: 'dolar', UTM: 'utm' };   // UTM: para el impuesto único del sueldo
 const LAST = 'moni.fxLast', LAST_AT = 'moni.fxLastAt';
 const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } } };
 

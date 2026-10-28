@@ -567,3 +567,9 @@ details summary { cursor: pointer; font-weight: 600; margin: 6px 0; }
 .calc-hint.bad { color: var(--neg); }
 .rep-tx { margin-top: 10px; }
 .rep-tx[hidden] { display: none; }
+/* liquidación de sueldo */
+.pay-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.pay-row input { width: 9.5em; flex: none; text-align: right; min-height: 40px; padding: 6px 10px; }
+.pay-row .r { text-align: right; white-space: nowrap; }
+.pay-row.strong { font-weight: 700; font-size: 17px; border-bottom: 0; }
+.pay-total { margin-top: 10px; }

@@ -13,7 +13,7 @@ import { openAccount } from './account.js';
 import { paceCard, netWorthTrend, openNetWorth } from './insights.js';
 import { sparkline } from '../charts.js';
 import { unusualCard, forecastAlert } from './analysis.js';
-import { registerOccurrences, openOccurrence, skipOccurrenceDialog, occurrenceTitle } from './schedules.js';
+import { registerOccurrences, openOccurrence, skipOccurrenceDialog, occurrenceTitle, openPayroll } from './schedules.js';
 
 const st = { mode: 'total', ym: null, laterOpen: false, zeroOpen: false, fixedOpen: false };
 // Cuentas en Inicio: plegada por defecto; se recuerda en este teléfono
@@ -119,7 +119,8 @@ function pendingRow(i, ref, root) {
     sub = `${isOverdue(i) ? `⚠️ era el ${when}` : i.due ? 'hoy' : `el ${when}`} · ${i.s.kind === 'in' ? 'ingreso ' : ''}${M.fmt(amt, i.s.currency)}${i.s.uf ? ` (${new Intl.NumberFormat('es-CL').format(i.s.uf)} UF)` : ''}`;
     action = [
       h('button', { class: 'btn small', onclick: () => registerOccurrences([i]) }, 'Registrar'),
-      h('button', { class: 'btn small ghost', 'aria-label': `Ajustar antes de registrar: ${title}`, onclick: () => openOccurrence(i) }, 'Ajustar')];
+      // del sueldo: se ajusta toda la liquidación (los descuentos dependen de los haberes)
+      h('button', { class: 'btn small ghost', 'aria-label': `Ajustar antes de registrar: ${title}`, onclick: () => ((i.s.payroll || i.s.calc) ? openPayroll(i.ym) : openOccurrence(i)) }, 'Ajustar')];
   } else if (i.type === 'bill') {
     icon = i.cat.icon || '🧾';
     title = i.cat.name;
@@ -226,7 +227,9 @@ function pendingCard(root) {
       h('div', { class: 'main' },
         h('div', { class: 'title' }, `${schedDue.length} programados para confirmar`),
         h('div', { class: 'sub' }, `${schedDue.slice(0, 3).map(occurrenceTitle).join(', ')}${schedDue.length > 3 ? ` y ${schedDue.length - 3} más` : ''}`)),
-      h('div', { class: 'row-actions' }, h('button', { class: 'btn small primary', onclick: () => registerOccurrences(schedDue) }, 'Registrar todos'))) : null,
+      h('div', { class: 'row-actions' },
+        schedDue.some(i => i.s.payroll || i.s.calc) ? h('button', { class: 'btn small', onclick: () => openPayroll(schedDue.find(i => i.s.payroll || i.s.calc).ym) }, 'Liquidación') : null,
+        h('button', { class: 'btn small primary', onclick: () => registerOccurrences(schedDue) }, 'Registrar todos'))) : null,
     schedGrouped ? h('button', { class: 'link-row small', onclick: () => { st.schedOpen = !st.schedOpen; renderHome(root); } }, st.schedOpen ? 'Ocultar el detalle' : 'Ver uno por uno (o ajustar)') : null,
     schedGrouped && st.schedOpen ? schedDue.map(i => pendingRow(i, ref, root)) : null,
     rest.map(i => pendingRow(i, ref, root)),

@@ -944,9 +944,13 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   // saca hasta ese monto cada mes, y lo demás de la categoría sigue en los promedios (ej. "Ingreso" programa la
   // colación pero también recibe devoluciones)
   const ufToday = rateFor('UF', todayStr()) || 1;
+  const utmToday = utmAt(todayStr(), ufToday);
+  // valor de un programado en un mes con la UF dada (la UTM sube con ella)
+  const schedValue = (x, ym, uf) => (x.calc ? (payrollFor(ym, { uf, utm: utmToday * uf / ufToday }).deds.find(d => d.s.id === x.id) || { amount: 0 }).amount
+    : x.uf ? x.uf * uf : x.amount * (x.currency === 'UF' ? uf : (rateFor(x.currency, todayStr()) ?? 1)));
   const covers = { in: new Map(), out: new Map() };
   for (const x of recurring) {
-    const v = x.uf ? x.uf * ufToday : x.amount * (rateFor(x.currency, todayStr()) ?? 1);
+    const v = schedValue(x, cur, ufToday);
     const m = covers[x.kind === 'in' ? 'in' : 'out'];
     m.set(x.categoryId, (m.get(x.categoryId) || 0) + scheduleOwnerAmount(x, cur, v));
   }
@@ -1000,8 +1004,8 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   // los programados de un mes que faltan (sin registrar ni omitir), con su signo y en tu parte
   const occ = scheduleOccurrences(`${cur}-01`, monthEnd(addMonths(cur, months))).filter(o => !o.tx && !o.skipped && schedIds.has(o.s.id));
   const schedOf = (ym, uf) => occ.filter(o => o.ym === ym).map(o => {
-    // en UF: con la UF proyectada de ese mes
-    const v = scheduleOwnerAmount(o.s, ym, o.s.uf ? o.s.uf * uf : o.s.amount * (o.s.currency === 'UF' ? uf : (rateFor(o.s.currency, today) ?? 1)));
+    // en UF: con la UF proyectada de ese mes; un descuento del sueldo, calculado con esa UF
+    const v = scheduleOwnerAmount(o.s, ym, schedValue(o.s, ym, uf));
     return { name: o.s.desc || (category(o.s.categoryId) || {}).name || '', amount: o.s.kind === 'in' ? v : -v, date: o.date };
   }).filter(x => Math.abs(x.amount) >= 0.5);
   const rows = [];
@@ -1836,6 +1840,7 @@ export function nextOccurrence(s) {
 }
 // monto de una fecha: fijo, o en UF con la UF de ese día (convertida a la moneda del programado)
 export function scheduleAmount(s, date) {
+  if (s.calc) { const p = payrollFor(date.slice(0, 7), { date }); const d = p.deds.find(x => x.s.id === s.id); return d ? d.amount : s.amount; }
   if (!s.uf) return s.amount;
   const uf = rateFor('UF', date), r = rateFor(s.currency, date) ?? 1;
   return uf ? Math.round(s.uf * uf / r * (currencyInfo(s.currency).decimals ? 100 : 1)) / (currencyInfo(s.currency).decimals ? 100 : 1) : s.amount;
@@ -1898,6 +1903,53 @@ export function realRentTags() {
     if (s.tag) tags.add(s.tag); else untagged = true;
   }
   return { any, tags, untagged };
+}
+
+// ---- Liquidación de sueldo (Chile) ----------------------------------------------------------------
+// En los programados del sueldo, los haberes se marcan imponibles o no (`payroll`: 'imp' | 'noimp') y los
+// descuentos legales se calculan cada mes sobre lo imponible, como en la liquidación (`calc`):
+// - AFP: su % de lo imponible, con tope de 90 UF.
+// - Salud: el mayor entre el 7% de lo imponible (mismo tope) y el plan de la Isapre en UF.
+// - Seguro de cesantía: 0,6% de lo imponible (contrato indefinido), con tope de 135,2 UF.
+// - Impuesto único: tabla mensual del SII en UTM, sobre lo imponible menos esas cotizaciones.
+// Los topes cambian cada año (estos son de 2026): revisar en febrero.
+export const PAYROLL_TOPES = { afpUF: 90, cesantiaUF: 135.2 };
+export const CALC = [['afp', 'AFP: % de lo imponible'], ['salud', 'Salud: 7% o el plan en UF (el mayor)'], ['cesantia', 'Seguro de cesantía: % de lo imponible'], ['impuesto', 'Impuesto único (tabla del SII)']];
+// tramos del impuesto único de segunda categoría: hasta (UTM), factor y cantidad a rebajar (UTM)
+const IUT = [[13.5, 0, 0], [30, 0.04, 0.54], [50, 0.08, 1.74], [70, 0.135, 4.49], [90, 0.23, 11.14], [120, 0.304, 17.8], [310, 0.35, 23.32], [Infinity, 0.4, 38.82]];
+export function impuestoUnico(base, utm) {
+  if (!(base > 0) || !utm) return 0;
+  const [, f, reb] = IUT.find(r => base / utm <= r[0]);
+  return Math.max(0, Math.round(base * f - Math.round(reb * utm)));
+}
+// UTM del mes (se guarda con los tipos de cambio); sin ella, estimada desde la UF
+export const utmAt = (date, uf) => rateFor('UTM', date) ?? Math.round((uf || rateFor('UF', date) || 0) * 1.747);
+// haberes: [{ amount, imponible }]; deds: [{ calc }]. Devuelve el monto de cada descuento (en el mismo orden)
+export function payrollCalc(haberes, deds, { uf, utm }) {
+  const imp = haberes.filter(x => x.imponible).reduce((a, x) => a + (x.amount || 0), 0);
+  const impAfp = uf ? Math.min(imp, PAYROLL_TOPES.afpUF * uf) : imp, impCes = uf ? Math.min(imp, PAYROLL_TOPES.cesantiaUF * uf) : imp;
+  const amounts = deds.map(d => {
+    const c = d.calc || {};
+    if (c.type === 'afp') return Math.round(impAfp * (c.pct || 0) / 100);
+    if (c.type === 'salud') return Math.round(Math.max(impAfp * (c.pct || 7) / 100, (c.planUF || 0) * (uf || 0)));
+    if (c.type === 'cesantia') return Math.round(impCes * (c.pct ?? 0.6) / 100);
+    return null;
+  });
+  const leyes = amounts.reduce((a, v) => a + (v || 0), 0);
+  const base = imp - leyes;
+  deds.forEach((d, i) => { if ((d.calc || {}).type === 'impuesto') amounts[i] = impuestoUnico(base, utm); });
+  return { imponible: imp, leyes, base, amounts };
+}
+// la liquidación programada de un mes: sus haberes y descuentos (con su monto), con la UF y UTM dadas o las del día
+export function payrollFor(ym, { date = null, uf = null, utm = null, haberes = null } = {}) {
+  const inMonth = schedules().filter(s => (s.payroll || s.calc) && scheduleMonths(s, ym, ym).length && !(s.skipped || []).includes(ym));
+  const d = date || scheduleDate(inMonth[0] || { day: 1 }, ym);
+  const ufv = uf || rateFor('UF', d) || 0;
+  const utmv = utm || utmAt(d, ufv);
+  const hs = haberes || inMonth.filter(s => s.payroll).map(s => ({ s, amount: s.uf ? Math.round(s.uf * ufv) : s.amount, imponible: s.payroll === 'imp' }));
+  const deds = inMonth.filter(s => s.calc);
+  const r = payrollCalc(hs, deds, { uf: ufv, utm: utmv });
+  return { ...r, haberes: hs, deds: deds.map((s, i) => ({ s, amount: r.amounts[i] })), uf: ufv, utm: utmv };
 }
 
 // ---- Asistentes: cuentas fijas y pendientes del mes ----------------------------
