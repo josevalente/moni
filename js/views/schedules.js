@@ -106,7 +106,8 @@ export function renderSchedules(root, back) {
   const list = M.schedules().map(s => ({ s, next: M.nextOccurrence(s) }))
     .sort((a, b) => (a.next ? a.next.date : '9999').localeCompare(b.next ? b.next.date : '9999'));
   const today = M.todayStr();
-  const newOne = () => openTxForm(null, { repeat: { every: 1, day: Number(today.slice(8)), end: '', uf: null }, open: 'repeat' });
+  // desde aquí la idea es programar: la casilla "registrar también este movimiento" parte desmarcada
+  const newOne = () => openTxForm(null, { repeat: { every: 1, day: Number(today.slice(8)), end: '', alsoTx: false }, open: 'repeat' });
   fill(root, back, h('h2', null, 'Programados'),
     h('p', { class: 'muted small' }, 'Lo que se repite (el arriendo que te depositan, su comisión, un seguro) o un movimiento futuro. No se registra solo: el día que corresponde aparece en Pendientes de Inicio para confirmarlo con un toque, o ajustarlo. La proyección de caja ya lo cuenta.'),
     h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: newOne }, '＋ Nuevo programado')),

@@ -237,11 +237,21 @@ export function openTxForm(existing, defaults = {}) {
   }
   // la explicación de cuándo aparece se actualiza sin redibujar (redibujar cerraría el teclado o el selector)
   const repHint = h('small', { class: 'muted' });
+  const repTxChk = h('input', { type: 'checkbox', checked: true });
+  const repTxText = h('span');
+  repTxChk.addEventListener('change', () => { if (s.repeat) { s.repeat.alsoTx = repTxChk.checked; repWhen(); } });
+  const repTxRow = h('label', { class: 'field check rep-tx' }, repTxChk, repTxText);
   const repWhen = () => {
     if (!s.repeat) return;
     const sc = { ...s.repeat, nth: s.repeat.mode === 'week' ? s.repeat.nth : null };
     const first = M.scheduleDate(sc, s.date.slice(0, 7));
-    repHint.textContent = `${M.everyLabel(s.repeat.every)}, ${M.scheduleWhen(sc)}${sc.nth ? ` (en ${M.monthName(s.date.slice(0, 7)).toLowerCase().split(' ')[0]}, el ${Number(first.slice(8))})` : ''}: ese día aparece en Pendientes para confirmarlo (con este monto o ajustándolo) y la proyección de caja ya lo cuenta.${s.entryUF ? ' En UF: cada vez con la UF de ese día.' : canUF() ? ' Para fijarlo en UF, elige UF junto al monto.' : ''}`;
+    const dd = (d) => new Date(d + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+    repTxText.textContent = `Registrar también este movimiento (${s.date === today ? 'hoy' : dd(s.date)})`;
+    repTxChk.checked = s.repeat.alsoTx !== false;
+    const firstAt = scheduleStart(sc, s.repeat.alsoTx !== false && s.date <= today);
+    const firstYm = firstAt.skipped.length ? M.addMonths(firstAt.start, sc.every) : firstAt.start;
+    repTxRow.hidden = s.date > today;              // con fecha futura no hay nada que registrar todavía
+    repHint.textContent = `${s.repeat.alsoTx === false || s.date > today ? `Solo se programa; el primero, el ${dd(M.scheduleDate(sc, firstYm))}. ` : ''}${M.everyLabel(s.repeat.every)}, ${M.scheduleWhen(sc)}${sc.nth ? ` (en ${M.monthName(s.date.slice(0, 7)).toLowerCase().split(' ')[0]}, el ${Number(first.slice(8))})` : ''}: ese día aparece en Pendientes para confirmarlo (con este monto o ajustándolo) y la proyección de caja ya lo cuenta.${s.entryUF ? ' En UF: cada vez con la UF de ese día.' : canUF() ? ' Para fijarlo en UF, elige UF junto al monto.' : ''}`;
   };
 
   // ---- sugerencias por descripción
@@ -515,6 +525,13 @@ export function openTxForm(existing, defaults = {}) {
   const allocLabel = () => (s.alloc === 'shared' ? splitLabel() : `Solo de ${M.personName(s.alloc === 'payer' || !s.alloc ? s.paidBy : s.alloc)}`);
   const repeatLabel = () => (s.repeat ? `${M.everyLabel(s.repeat.every)}, ${M.scheduleWhen({ ...s.repeat, nth: s.repeat.mode === 'week' ? s.repeat.nth : null })}${s.entryUF ? ' · en UF' : ''}` : 'Repetir');
   const canRepeat = () => !isEdit && !s.scheduleId && (s.kind === 'out' || s.kind === 'in');
+  // el programado parte en el mes de la fecha; si ese mes su día ya pasó (antes de la fecha) y no se registra este
+  // movimiento, ese mes se omite: el primero es el siguiente que corresponde
+  const scheduleStart = (sc, registering) => {
+    const start = s.date.slice(0, 7);
+    const skip = !registering && sc.every && M.scheduleDate(sc, start) < s.date;
+    return { start, skipped: skip ? [start] : [] };
+  };
   // con fecha futura no se registra todavía: queda programado
   let futureNote = null;
   const sumChips = {};
@@ -528,6 +545,7 @@ export function openTxForm(existing, defaults = {}) {
     s.date = dateIn.value || today;
     s.fxTouched = false;
     if (s.entryUF) updateEval();                       // en UF: el equivalente cambia con la fecha
+    if (s.repeat) repWhen();
     updateFx(); updateSummaryLabels();
     if (toAmtInput) toAmtInput.placeholder = toAmtHint();
   });
@@ -686,6 +704,7 @@ export function openTxForm(existing, defaults = {}) {
             week ? [h('label', { class: 'fc-field' }, h('span', null, 'Cuál'), repNthSel), h('label', { class: 'fc-field' }, h('span', null, 'Día'), repWdSel)]
               : h('label', { class: 'fc-field' }, h('span', null, 'Día del mes'), repDayIn),
             h('label', { class: 'fc-field' }, h('span', null, 'Hasta (opcional)'), repEndIn)) : null,
+          s.repeat ? repTxRow : null,
           s.repeat ? repHint : null));
       }
     } else {
@@ -791,13 +810,18 @@ export function openTxForm(existing, defaults = {}) {
         id: db.uid(), desc: tx.desc, kind: tx.kind, amount: tx.amount, currency: tx.currency, accountId: tx.accountId, categoryId: tx.categoryId,
         alloc: tx.alloc, paidBy: tx.paidBy, ...(tx.tag ? { tag: tx.tag } : {}), ...(ufAmount != null ? { uf: ufAmount } : {}),
         day: rep ? rep.day : Number(s.date.slice(8)), ...(rep && rep.mode === 'week' ? { nth: rep.nth } : {}),
-        every: rep ? rep.every : 0, start: s.date.slice(0, 7), end: (rep && rep.end) || null, skipped: [],
+        every: rep ? rep.every : 0, end: (rep && rep.end) || null,
       };
+      // con la casilla desmarcada (o fecha futura) solo se programa
+      const registerNow = !future && !(rep && rep.alsoTx === false);
+      Object.assign(sc, scheduleStart(sc, registerNow));
       await db.put('schedules', sc);
-      if (!future) { tx.scheduleId = sc.id; tx.scheduleMonth = sc.start; await db.put('tx', tx); }
-      const when = new Date(M.scheduleDate(sc, sc.start) + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
-      toast(future ? `Programado para el ${when}: ese día aparece en Pendientes` : `Guardado y programado: ${M.everyLabel(sc.every).toLowerCase()}, ${M.scheduleWhen(sc)}`, {
-        label: 'Deshacer', ms: 6000, onAction: async () => { await db.del('schedules', sc.id); if (!future) await db.del('tx', tx.id); },
+      if (registerNow) { tx.scheduleId = sc.id; tx.scheduleMonth = sc.start; await db.put('tx', tx); }
+      const firstYm = sc.skipped.length ? M.addMonths(sc.start, sc.every) : sc.start;
+      const when = new Date(M.scheduleDate(sc, firstYm) + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+      toast(registerNow ? `Guardado y programado: ${M.everyLabel(sc.every).toLowerCase()}, ${M.scheduleWhen(sc)}`
+        : `Programado${sc.every ? `: ${M.everyLabel(sc.every).toLowerCase()}, ${M.scheduleWhen(sc)}` : ''}. El primero, el ${when}: ese día aparece en Pendientes`, {
+        label: 'Deshacer', ms: 6000, onAction: async () => { await db.del('schedules', sc.id); if (registerNow) await db.del('tx', tx.id); },
       });
     } else {
       await db.put('tx', tx);
