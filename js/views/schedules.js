@@ -56,7 +56,9 @@ export function editSchedule(sc) {
   // lo que ya se registró desde este programado
   const done = M.sortTx(db.all('tx').filter(t => t.scheduleId === sc.id)).slice(0, 6);
   formModal({
-    title: sc.kind === 'in' ? 'Ingreso programado' : 'Gasto programado', value: { ...sc, end: sc.end || '', every: String(sc.every), accountId: sc.accountId || '', tag: sc.tag || '' },
+    title: sc.kind === 'in' ? 'Ingreso programado' : 'Gasto programado',
+    value: { ...sc, end: sc.end || '', every: String(sc.every), accountId: sc.accountId || '', tag: sc.tag || '',
+      mode: sc.nth ? 'week' : 'day', nthN: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).n), nthWd: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).wd) },
     fields: [
       { key: 'desc', label: 'Descripción', type: 'text' },
       { key: 'categoryId', label: 'Categoría', type: 'select', options: cats.map(c => ({ v: c.id, l: (c.icon ? c.icon + ' ' : '') + c.name })) },
@@ -64,7 +66,10 @@ export function editSchedule(sc) {
       { key: 'tag', label: 'Etiqueta (opcional)', type: 'text' },
       ...(ufOk ? [{ key: 'uf', label: 'Monto fijo en UF (opcional)', type: 'number', calc: true, hint: 'Acepta operaciones, ej. 8,5 × 1,19. Cada vez se registra con la UF de ese día. Vacío: monto fijo en pesos.' }] : []),
       { key: 'amount', label: `Monto (${sc.currency})`, type: 'number', calc: true, required: true, show: (v) => !v.uf },
-      { key: 'day', label: 'Día del mes', type: 'number', required: true },
+      { key: 'mode', label: 'Qué día', type: 'select', options: [{ v: 'day', l: 'Un día del mes' }, { v: 'week', l: 'Un día de la semana (ej. primer lunes)' }] },
+      { key: 'day', label: 'Día del mes', type: 'number', required: true, show: (v) => v.mode !== 'week', hint: 'Con 31, el último día de cada mes.' },
+      { key: 'nthN', label: 'Cuál', type: 'select', options: M.NTHS.map(([v, l]) => ({ v: String(v), l })), show: (v) => v.mode === 'week' },
+      { key: 'nthWd', label: 'Día de la semana', type: 'select', options: [1, 2, 3, 4, 5, 6, 0].map(v => ({ v: String(v), l: M.WEEKDAYS[v] })), show: (v) => v.mode === 'week' },
       { key: 'every', label: 'Se repite', type: 'select', options: M.EVERY.map(([v, l]) => ({ v: String(v), l })) },
       { key: 'end', label: 'Hasta (AAAA-MM, opcional)', type: 'month' },
     ],
@@ -73,10 +78,12 @@ export function editSchedule(sc) {
       done.length ? h('div', { class: 'field' }, h('span', null, 'Últimos registrados'),
         done.map(t => h('div', { class: 'sched-done' }, h('span', null, new Date(t.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' })), h('span', null, M.fmt(t.amount, t.currency))))) : null),
     onSave: async (v) => {
-      const day = Math.round(v.day);
+      const week = v.mode === 'week';
+      const day = week ? (sc.day || 1) : Math.round(v.day);
       if (!(day >= 1 && day <= 31)) { toast('El día va de 1 a 31'); return false; }
       if (v.end && !/^\d{4}-\d{2}$/.test(v.end)) { toast('Hasta: usa AAAA-MM'); return false; }
       const out = { ...db.get('schedules', sc.id), desc: v.desc, day, every: Number(v.every), end: v.end || null, categoryId: v.categoryId };
+      if (week) out.nth = { n: Number(v.nthN), wd: Number(v.nthWd) }; else delete out.nth;
       if (v.tag) out.tag = v.tag.trim(); else delete out.tag;
       // la cuenta define la moneda del movimiento
       if ('accountId' in v) { out.accountId = v.accountId || null; const a = out.accountId && M.account(out.accountId); if (a) out.currency = a.currency; }
@@ -111,7 +118,7 @@ export function renderSchedules(root, back) {
         h('div', { class: 'main' },
           h('div', { class: 'title' }, s.desc || (cat && cat.name) || 'Programado'),
           h('div', { class: 'sub' }, [
-            s.every ? `${M.everyLabel(s.every)}, día ${s.day}` : `Una vez, ${fmtDay(M.scheduleDate(s, s.start))}`,
+            s.every ? `${M.everyLabel(s.every)}, ${M.scheduleWhen(s)}` : `Una vez, ${fmtDay(M.scheduleDate(s, s.start))}`,
             cat ? cat.name : null, s.tag ? '#' + s.tag : null,
             ended ? 'terminado' : `próximo: ${fmtDay(next.date)}${next.date < today ? ' (sin confirmar)' : ''}`,
             s.end ? `hasta ${M.monthName(s.end).toLowerCase()}` : null,

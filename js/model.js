@@ -1718,8 +1718,34 @@ export const EVERY = [[0, 'Una vez'], [1, 'Cada mes'], [2, 'Cada 2 meses'], [3, 
 export const everyLabel = (n) => (EVERY.find(e => e[0] === n) || [0, `Cada ${n} meses`])[1];
 export const schedules = () => db.all('schedules').filter(s => !s.archived);
 const monthDiff = (a, b) => (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5, 7)) - Number(a.slice(5, 7));
-// el día del mes; si el mes es más corto (ej. día 31 en febrero), el último día
-export const scheduleDate = (s, ym) => `${ym}-${String(Math.min(s.day || 1, Number(monthEnd(ym).slice(8)))).padStart(2, '0')}`;
+// Cuándo cae en el mes: un día fijo (si el mes es más corto, ej. día 31 en febrero, el último día) o un día de
+// la semana contado desde el inicio o el final del mes (`nth`: { n: 1..4 o -1 último, -2 penúltimo; wd: 0 domingo..6 })
+export const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+export const NTHS = [[1, 'Primer'], [2, 'Segundo'], [3, 'Tercer'], [4, 'Cuarto'], [-2, 'Penúltimo'], [-1, 'Último']];
+export function nthWeekday(ym, n, wd) {
+  const [y, m] = ym.split('-').map(Number);
+  const days = Number(monthEnd(ym).slice(8));
+  if (n > 0) {
+    const first = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+    return 1 + ((wd - first + 7) % 7) + (n - 1) * 7;          // el 4º siempre existe (día 28 o antes)
+  }
+  const last = new Date(Date.UTC(y, m - 1, days)).getUTCDay();
+  return days - ((last - wd + 7) % 7) + (n + 1) * 7;
+}
+export const scheduleDate = (s, ym) => {
+  const d = s.nth ? nthWeekday(ym, s.nth.n, s.nth.wd) : Math.min(s.day || 1, Number(monthEnd(ym).slice(8)));
+  return `${ym}-${String(d).padStart(2, '0')}`;
+};
+// "día 5" o "primer lunes"
+export const scheduleWhen = (s) => (s.nth ? `${(NTHS.find(x => x[0] === s.nth.n) || [0, ''])[1].toLowerCase()} ${WEEKDAYS[s.nth.wd]}` : `día ${s.day}`);
+// el n-ésimo día de la semana que corresponde a una fecha (para proponerlo): el 27-oct-2026 es el último martes
+export function nthOfDate(date) {
+  const ym = date.slice(0, 7), d = Number(date.slice(8));
+  const wd = new Date(date + 'T12:00:00Z').getUTCDay();
+  const last = d + 7 > Number(monthEnd(ym).slice(8));
+  const n = Math.ceil(d / 7);
+  return { n: last && n >= 4 ? -1 : Math.min(n, 4), wd };
+}
 export function scheduleMonths(s, from, to) {
   const end = s.end && s.end < to ? s.end : to;
   if (!s.every) return s.start >= from && s.start <= end ? [s.start] : [];

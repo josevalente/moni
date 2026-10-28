@@ -218,20 +218,31 @@ export function openTxForm(existing, defaults = {}) {
   const lastAmtBox = h('span');
   const dateIn = h('input', { type: 'date', value: s.date, 'aria-label': 'Fecha' });
   const tagIn = h('input', { type: 'text', placeholder: 'Ej: Viaje sur', value: s.tag, list: 'taglist', 'aria-label': 'Etiqueta' });
-  // repetir: día del mes, hasta cuándo y, si se quiere, el monto fijado en UF
+  // repetir: un día del mes (ej. el 5) o un día de la semana (ej. el primer lunes), y hasta cuándo
   const repDayIn = h('input', { type: 'text', inputmode: 'numeric', 'aria-label': 'Día del mes', placeholder: 'día' });
+  const repNthSel = h('select', { 'aria-label': 'Cuál' }, M.NTHS.map(([v, l]) => h('option', { value: String(v) }, l)));
+  const repWdSel = h('select', { 'aria-label': 'Día de la semana' }, [1, 2, 3, 4, 5, 6, 0].map(v => h('option', { value: String(v) }, M.WEEKDAYS[v])));
   const repEndIn = h('input', { type: 'month', 'aria-label': 'Hasta (opcional)' });
-  // lo escrito en los campos de Repetir (se lee al escribir y otra vez al guardar)
+  // lo elegido en los campos de Repetir (se lee al cambiar y otra vez al guardar)
   const readRepeat = () => {
     if (!s.repeat) return;
     const d = Math.round(Number(String(repDayIn.value).trim()));
     if (d >= 1 && d <= 31) s.repeat.day = d;
+    s.repeat.nth = { n: Number(repNthSel.value), wd: Number(repWdSel.value) };
     s.repeat.end = repEndIn.value || '';
   };
   for (const ev of ['input', 'change']) {
-    repDayIn.addEventListener(ev, () => { readRepeat(); updateSummaryLabels(); });
+    for (const el of [repDayIn, repNthSel, repWdSel]) el.addEventListener(ev, () => { readRepeat(); updateSummaryLabels(); repWhen(); });
     repEndIn.addEventListener(ev, readRepeat);
   }
+  // la explicación de cuándo aparece se actualiza sin redibujar (redibujar cerraría el teclado o el selector)
+  const repHint = h('small', { class: 'muted' });
+  const repWhen = () => {
+    if (!s.repeat) return;
+    const sc = { ...s.repeat, nth: s.repeat.mode === 'week' ? s.repeat.nth : null };
+    const first = M.scheduleDate(sc, s.date.slice(0, 7));
+    repHint.textContent = `${M.everyLabel(s.repeat.every)}, ${M.scheduleWhen(sc)}${sc.nth ? ` (en ${M.monthName(s.date.slice(0, 7)).toLowerCase().split(' ')[0]}, el ${Number(first.slice(8))})` : ''}: ese día aparece en Pendientes para confirmarlo (con este monto o ajustándolo) y la proyección de caja ya lo cuenta.${s.entryUF ? ' En UF: cada vez con la UF de ese día.' : canUF() ? ' Para fijarlo en UF, elige UF junto al monto.' : ''}`;
+  };
 
   // ---- sugerencias por descripción
   const allocLabelOf = (alloc, paidBy) => (alloc === 'shared' ? 'compartido' : alloc && alloc.startsWith('p:') ? `solo de ${M.personName(alloc.slice(2))}` : 'personal');
@@ -488,7 +499,7 @@ export function openTxForm(existing, defaults = {}) {
     return 'Compartido ' + people.map(p => Math.round((pct[p.id] || 0) * 100)).join('/');
   }
   const allocLabel = () => (s.alloc === 'shared' ? splitLabel() : `Solo de ${M.personName(s.alloc === 'payer' || !s.alloc ? s.paidBy : s.alloc)}`);
-  const repeatLabel = () => (s.repeat ? `${M.everyLabel(s.repeat.every)}, día ${s.repeat.day}${s.entryUF ? ' · en UF' : ''}` : 'Repetir');
+  const repeatLabel = () => (s.repeat ? `${M.everyLabel(s.repeat.every)}, ${M.scheduleWhen({ ...s.repeat, nth: s.repeat.mode === 'week' ? s.repeat.nth : null })}${s.entryUF ? ' · en UF' : ''}` : 'Repetir');
   const canRepeat = () => !isEdit && !s.scheduleId && (s.kind === 'out' || s.kind === 'in');
   // con fecha futura no se registra todavía: queda programado
   let futureNote = null;
@@ -550,7 +561,7 @@ export function openTxForm(existing, defaults = {}) {
       fileIn));
     if (isFlow) parts.push(h('div', { class: 'desc-wrap' }, descIn, suggestBox));
     const fromSched = (isEdit ? existing.scheduleId : s.scheduleId) && db.get('schedules', isEdit ? existing.scheduleId : s.scheduleId);
-    if (fromSched) parts.push(h('div', { class: 'sched-note' }, `🔁 De un programado (${M.everyLabel(fromSched.every).toLowerCase()}, día ${fromSched.day}). Cambiar este no cambia los próximos. `,
+    if (fromSched) parts.push(h('div', { class: 'sched-note' }, `🔁 De un programado (${M.everyLabel(fromSched.every).toLowerCase()}, ${M.scheduleWhen(fromSched)}). Cambiar este no cambia los próximos. `,
       h('a', { href: '#/mas/programados', onclick: () => m.close() }, 'Ver programados')));
     // con cuenta, la moneda es la de la cuenta; también se puede escribir en UF (se guarda convertido)
     if (!canUF()) s.entryUF = false;
@@ -641,17 +652,27 @@ export function openTxForm(existing, defaults = {}) {
       } else if (s.open === 'repeat' && canRepeat()) {
         const pick = (v) => {
           const n = Number(v);
-          s.repeat = n ? { day: Number(s.date.slice(8)), end: '', ...(s.repeat || {}), every: n } : null;
+          // por defecto, lo que corresponde a la fecha: su día del mes y su día de la semana (ej. último martes)
+          s.repeat = n ? { day: Number(s.date.slice(8)), nth: M.nthOfDate(s.date), mode: 'day', end: '', ...(s.repeat || {}), every: n } : null;
           render();
         };
         const opts = [{ v: '0', l: 'No' }, ...M.EVERY.filter(e => e[0]).map(e => ({ v: String(e[0]), l: e[1].replace('Cada ', '') }))];
-        if (s.repeat) { repDayIn.value = String(s.repeat.day); repEndIn.value = s.repeat.end || ''; }
+        if (s.repeat) {
+          if (!s.repeat.nth) s.repeat.nth = M.nthOfDate(s.date);
+          if (!s.repeat.mode) s.repeat.mode = 'day';
+          repDayIn.value = String(s.repeat.day); repEndIn.value = s.repeat.end || '';
+          repNthSel.value = String(s.repeat.nth.n); repWdSel.value = String(s.repeat.nth.wd);
+          repWhen();
+        }
+        const week = s.repeat && s.repeat.mode === 'week';
         parts.push(h('div', { class: 'sum-editor' },
           seg(opts, String(s.repeat ? s.repeat.every : 0), pick, 'Repetir cada'),
-          s.repeat ? h('div', { class: 'rep-fields' },
-            h('label', { class: 'fc-field' }, h('span', null, 'Día del mes'), repDayIn),
+          s.repeat ? seg([{ v: 'day', l: 'Un día del mes' }, { v: 'week', l: 'Un día de la semana' }], s.repeat.mode, (v) => { s.repeat.mode = v; render(); }, 'Qué día') : null,
+          s.repeat ? h('div', { class: 'rep-fields' + (week ? ' three' : '') },
+            week ? [h('label', { class: 'fc-field' }, h('span', null, 'Cuál'), repNthSel), h('label', { class: 'fc-field' }, h('span', null, 'Día'), repWdSel)]
+              : h('label', { class: 'fc-field' }, h('span', null, 'Día del mes'), repDayIn),
             h('label', { class: 'fc-field' }, h('span', null, 'Hasta (opcional)'), repEndIn)) : null,
-          s.repeat ? h('small', { class: 'muted' }, `Desde ${M.monthName(s.date.slice(0, 7)).toLowerCase()}: el día ${s.repeat.day} aparece en Pendientes para confirmarlo (con este monto o ajustándolo) y la proyección de caja ya lo cuenta.${s.entryUF ? ' En UF: cada vez con la UF de ese día.' : canUF() ? ' Para fijarlo en UF, elige UF junto al monto.' : ''}`) : null));
+          s.repeat ? repHint : null));
       }
     } else {
       // transferencias y pagos entre ustedes: formato clásico
@@ -755,12 +776,13 @@ export function openTxForm(existing, defaults = {}) {
       const sc = {
         id: db.uid(), desc: tx.desc, kind: tx.kind, amount: tx.amount, currency: tx.currency, accountId: tx.accountId, categoryId: tx.categoryId,
         alloc: tx.alloc, paidBy: tx.paidBy, ...(tx.tag ? { tag: tx.tag } : {}), ...(ufAmount != null ? { uf: ufAmount } : {}),
-        day: rep ? rep.day : Number(s.date.slice(8)), every: rep ? rep.every : 0, start: s.date.slice(0, 7), end: (rep && rep.end) || null, skipped: [],
+        day: rep ? rep.day : Number(s.date.slice(8)), ...(rep && rep.mode === 'week' ? { nth: rep.nth } : {}),
+        every: rep ? rep.every : 0, start: s.date.slice(0, 7), end: (rep && rep.end) || null, skipped: [],
       };
       await db.put('schedules', sc);
       if (!future) { tx.scheduleId = sc.id; tx.scheduleMonth = sc.start; await db.put('tx', tx); }
       const when = new Date(M.scheduleDate(sc, sc.start) + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
-      toast(future ? `Programado para el ${when}: ese día aparece en Pendientes` : `Guardado y programado: ${M.everyLabel(sc.every).toLowerCase()}, día ${sc.day}`, {
+      toast(future ? `Programado para el ${when}: ese día aparece en Pendientes` : `Guardado y programado: ${M.everyLabel(sc.every).toLowerCase()}, ${M.scheduleWhen(sc)}`, {
         label: 'Deshacer', ms: 6000, onAction: async () => { await db.del('schedules', sc.id); if (!future) await db.del('tx', tx.id); },
       });
     } else {
