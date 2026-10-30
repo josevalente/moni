@@ -1944,7 +1944,8 @@ export function payrollCalc(haberes, deds, { uf, utm }) {
 export function payrollFor(ym, { date = null, uf = null, utm = null, haberes = null } = {}) {
   const inMonth = schedules().filter(s => (s.payroll || s.calc) && scheduleMonths(s, ym, ym).length && !(s.skipped || []).includes(ym));
   const d = date || scheduleDate(inMonth[0] || { day: 1 }, ym);
-  const ufv = uf || rateFor('UF', d) || 0;
+  // la liquidación usa la UF del último día del mes (topes y plan de la Isapre), aunque se pague antes
+  const ufv = uf || rateFor('UF', monthEnd(ym)) || rateFor('UF', d) || 0;
   const utmv = utm || utmAt(d, ufv);
   const hs = haberes || inMonth.filter(s => s.payroll).map(s => ({ s, amount: s.uf ? Math.round(s.uf * ufv) : s.amount, imponible: s.payroll === 'imp' }));
   const deds = inMonth.filter(s => s.calc);

@@ -144,10 +144,16 @@ export async function openPayroll(ym) {
   function recalc() {
     const r = calc();
     const dedAmt = (i) => (done.has(p.deds[i].s.id) ? done.get(p.deds[i].s.id).amount : r.amounts[i]);
-    fill(dedBox, p.deds.map((d, i) => h('div', { class: 'pay-row' }, h('span', null, d.s.desc || (M.category(d.s.categoryId) || {}).name, done.has(d.s.id) ? h('small', { class: 'muted' }, ' · ya registrado') : null), h('span', { class: 'r' }, M.fmt(-dedAmt(i), base)))));
+    // salud como en la liquidación: el 7% legal y, si el plan cuesta más, el adicional
+    const legal7 = (d) => Math.round(Math.min(r.imponible, M.PAYROLL_TOPES.afpUF * p.uf) * ((d.s.calc || {}).pct || 7) / 100);
+    fill(dedBox, p.deds.map((d, i) => h('div', { class: 'pay-row' },
+      h('span', null, d.s.desc || (M.category(d.s.categoryId) || {}).name,
+        (d.s.calc || {}).type === 'salud' && dedAmt(i) > legal7(d) ? h('small', { class: 'muted' }, ` · 7% ${M.fmt(legal7(d), base)} + adicional ${M.fmt(dedAmt(i) - legal7(d), base)}`) : null,
+        done.has(d.s.id) ? h('small', { class: 'muted' }, ' · ya registrado') : null),
+      h('span', { class: 'r' }, M.fmt(-dedAmt(i), base)))));
     const hab = lines.reduce((a, x) => a + (x.amount || 0), 0);
     const ded = p.deds.reduce((a, d, i) => a + dedAmt(i), 0) + extraDeds.reduce((a, x) => a + (x.amount || 0), 0);
-    fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`), h('span', null, `UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
+    fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`), h('span', null, `UF $${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p.uf)} · UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
       h('div', { class: 'pay-row strong' }, h('span', null, 'Líquido'), h('span', { class: 'r' }, M.fmt(hab - ded, base))));
   }
   function draw() {
