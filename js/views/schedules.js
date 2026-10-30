@@ -118,13 +118,25 @@ export function editSchedule(sc) {
 
 // Liquidación de un mes: los haberes programados (se ajustan o se agregan, ej. un aguinaldo) y los descuentos
 // legales calculados al momento sobre lo imponible; se registra todo junto, con un solo "Deshacer".
-export async function openPayroll(ym) {
+export function openPayroll(ym) {
   const base = M.base();
   let p = M.payrollFor(ym);
   if (!p.haberes.length && !p.deds.length) { toast('No hay programados del sueldo este mes'); return; }
   const date = M.scheduleDate((p.haberes[0] || p.deds[0]).s, ym);
-  // la UTM del mes (para el impuesto): si no está guardada, se consulta
-  if (!M.rateFor('UTM', date) && navigator.onLine !== false) { await Promise.race([FX.refreshRates({ force: true }).catch(() => {}), new Promise(r => setTimeout(r, 4000))]); p = M.payrollFor(ym); }
+  // la UTM del mes (para el impuesto) y la UF del último día del mes (topes y plan de la Isapre): si no están
+  // guardadas, se consultan
+  // guardadas, se consultan sin esperar: la ventana se abre al tiro y se recalcula cuando llegan
+  const ufEnd = () => { const r = M.seriesAt('UF', M.monthEnd(ym)); return r && r.date === M.monthEnd(ym); };
+  const missing = () => !M.rateFor('UTM', date) || !ufEnd();
+  let updating = missing() && navigator.onLine !== false;
+  if (updating) {
+    FX.refreshRates({ force: true }).catch(() => {}).finally(() => {
+      updating = false;
+      const fresh = M.payrollFor(ym);
+      p.uf = fresh.uf; p.utm = fresh.utm;
+      if (document.body.contains(box)) recalc();
+    });
+  }
   const done = new Map(db.all('tx').filter(t => t.scheduleId && t.scheduleMonth === ym).map(t => [t.scheduleId, t]));
   const first = (p.haberes[0] || p.deds[0]).s;
   const incomeCats = M.categories().filter(c => !c.archived && c.kind === 'income');
@@ -153,7 +165,7 @@ export async function openPayroll(ym) {
       h('span', { class: 'r' }, M.fmt(-dedAmt(i), base)))));
     const hab = lines.reduce((a, x) => a + (x.amount || 0), 0);
     const ded = p.deds.reduce((a, d, i) => a + dedAmt(i), 0) + extraDeds.reduce((a, x) => a + (x.amount || 0), 0);
-    fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`), h('span', null, `UF $${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p.uf)} · UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
+    fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`), h('span', null, `UF $${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p.uf)}${ufEnd() ? ` (${fmtDay(M.monthEnd(ym))})` : updating ? ' (actualizando…)' : ' (aún no está la del último día del mes)'} · UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
       h('div', { class: 'pay-row strong' }, h('span', null, 'Líquido'), h('span', { class: 'r' }, M.fmt(hab - ded, base))));
   }
   function draw() {

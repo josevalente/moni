@@ -32,9 +32,12 @@ async function doRefresh(force) {
     if (!curs.length) continue;
     // al día: los últimos ~30 valores; si el último guardado es antiguo, los años que faltan
     const last = curs.map(lastRateDate).filter(Boolean).sort()[0];
+    // la UF se publica hasta el día 9 del mes siguiente: la del año trae también las que vienen (la del último
+    // día del mes la usa la liquidación de sueldo); en diciembre, también la del año siguiente
+    const ahead = code === 'uf' ? [today.slice(0, 4), ...(today.slice(5, 7) === '12' ? [String(Number(today.slice(0, 4)) + 1)] : [])] : [];
     const urls = !last || last < addDays(today, -25)
-      ? [...new Set([(last || today).slice(0, 4), today.slice(0, 4)])].map(y => `${API}/${code}/${y}`)
-      : [`${API}/${code}`];
+      ? [...new Set([(last || today).slice(0, 4), today.slice(0, 4), ...ahead])].map(y => `${API}/${code}/${y}`)
+      : ahead.length ? ahead.map(y => `${API}/${code}/${y}`) : [`${API}/${code}`];
     for (const url of urls) {
       try {
         const r = await fetch(url, { cache: 'no-store', signal: timeoutSignal() });
