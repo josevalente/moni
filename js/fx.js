@@ -32,12 +32,9 @@ async function doRefresh(force) {
     if (!curs.length) continue;
     // al día: los últimos ~30 valores; si el último guardado es antiguo, los años que faltan
     const last = curs.map(lastRateDate).filter(Boolean).sort()[0];
-    // la UF se publica hasta el día 9 del mes siguiente: la del año trae también las que vienen (la del último
-    // día del mes la usa la liquidación de sueldo); en diciembre, también la del año siguiente
-    const ahead = code === 'uf' ? [today.slice(0, 4), ...(today.slice(5, 7) === '12' ? [String(Number(today.slice(0, 4)) + 1)] : [])] : [];
     const urls = !last || last < addDays(today, -25)
-      ? [...new Set([(last || today).slice(0, 4), today.slice(0, 4), ...ahead])].map(y => `${API}/${code}/${y}`)
-      : ahead.length ? ahead.map(y => `${API}/${code}/${y}`) : [`${API}/${code}`];
+      ? [...new Set([(last || today).slice(0, 4), today.slice(0, 4)])].map(y => `${API}/${code}/${y}`)
+      : [`${API}/${code}`];
     for (const url of urls) {
       try {
         const r = await fetch(url, { cache: 'no-store', signal: timeoutSignal() });
@@ -94,6 +91,22 @@ async function fillPending() {
     }
   }
   if (upd.length) await db.putMany('tx', upd);
+}
+
+// El valor de una fecha puntual (ej. la UF del último día del mes, que se publica antes): una consulta liviana.
+// Devuelve el valor guardado o null si no se pudo.
+export async function fetchRateOn(cur, date) {
+  const code = MAP[cur];
+  if (!code || (typeof navigator !== 'undefined' && navigator.onLine === false)) return null;
+  try {
+    const r = await fetch(`${API}/${code}/${date.slice(8, 10)}-${date.slice(5, 7)}-${date.slice(0, 4)}`, { cache: 'no-store', signal: timeoutSignal(10000) });
+    if (!r.ok) return null;
+    const p = ((await r.json()).serie || []).find(x => x.fecha.slice(0, 10) === date);
+    if (!p) return null;
+    const cur0 = db.get('rates', `${cur}|${date}`);
+    if (!(cur0 && cur0.manual)) await db.put('rates', { id: `${cur}|${date}`, cur, date, rate: p.valor });
+    return p.valor;
+  } catch { return null; }
 }
 
 export async function setManualRate(cur, date, rate) {

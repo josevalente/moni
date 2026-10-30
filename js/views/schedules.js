@@ -3,7 +3,7 @@
 import * as db from '../db.js';
 import * as M from '../model.js';
 import * as FX from '../fx.js';
-import { fill, h, modal, toast, formModal, numText } from '../ui.js';
+import { fill, h, modal, toast, formModal, numText, promptDialog } from '../ui.js';
 import { openTxForm } from './add.js';
 
 const fmtDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
@@ -130,7 +130,8 @@ export function openPayroll(ym) {
   const missing = () => !M.rateFor('UTM', date) || !ufEnd();
   let updating = missing() && navigator.onLine !== false;
   if (updating) {
-    FX.refreshRates({ force: true }).catch(() => {}).finally(() => {
+    // la UF del último día del mes, puntual (liviana); la UTM viene con la consulta del día
+    Promise.all([ufEnd() ? null : FX.fetchRateOn('UF', M.monthEnd(ym)), M.rateFor('UTM', date) ? null : FX.refreshRates({ force: true }).catch(() => {})]).catch(() => {}).finally(() => {
       updating = false;
       const fresh = M.payrollFor(ym);
       p.uf = fresh.uf; p.utm = fresh.utm;
@@ -165,7 +166,18 @@ export function openPayroll(ym) {
       h('span', { class: 'r' }, M.fmt(-dedAmt(i), base)))));
     const hab = lines.reduce((a, x) => a + (x.amount || 0), 0);
     const ded = p.deds.reduce((a, d, i) => a + dedAmt(i), 0) + extraDeds.reduce((a, x) => a + (x.amount || 0), 0);
-    fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`), h('span', null, `UF $${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p.uf)}${ufEnd() ? ` (${fmtDay(M.monthEnd(ym))})` : updating ? ' (actualizando…)' : ' (aún no está la del último día del mes)'} · UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
+    const ufTxt = `UF $${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p.uf)}`;
+    fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`),
+      h('span', null, `${ufTxt}${ufEnd() ? ` (${fmtDay(M.monthEnd(ym))})` : updating ? ' (actualizando…)' : ''} · UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
+      // sin la UF del último día del mes: se puede escribir la de la liquidación (aparece en ella)
+      !ufEnd() && !updating ? h('div', { class: 'alloc-note' }, h('span', null, `Falta la UF del ${fmtDay(M.monthEnd(ym))}: se está usando ${ufTxt}. Puedes escribir la que aparece en tu liquidación.`),
+        h('button', { type: 'button', class: 'btn small', onclick: async () => {
+          const v = await promptDialog(`UF del ${fmtDay(M.monthEnd(ym))}`, { label: 'Valor de la UF', type: 'number', hint: 'Ej. 41.247,63' });
+          const n = v == null ? NaN : M.parseAmount(v);
+          if (!(n > 1000)) return;
+          await FX.setManualRate('UF', M.monthEnd(ym), n);
+          const fresh = M.payrollFor(ym); p.uf = fresh.uf; recalc();
+        } }, 'Escribir UF')) : null,
       h('div', { class: 'pay-row strong' }, h('span', null, 'Líquido'), h('span', { class: 'r' }, M.fmt(hab - ded, base))));
   }
   function draw() {
