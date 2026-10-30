@@ -126,12 +126,14 @@ export function openPayroll(ym) {
   // la UTM del mes (para el impuesto) y la UF del último día del mes (topes y plan de la Isapre): si no están
   // guardadas, se consultan
   // guardadas, se consultan sin esperar: la ventana se abre al tiro y se recalcula cuando llegan
-  const ufEnd = () => { const r = M.seriesAt('UF', M.monthEnd(ym)); return r && r.date === M.monthEnd(ym); };
+  // la UF del último día del mes: guardada, o calculada con las del período (ver M.ufOn)
+  const ufEnd = () => !!M.ufOn(M.monthEnd(ym));
+  const ufCalc = () => { const u = M.ufOn(M.monthEnd(ym)); return !!(u && u.calc); };
   const missing = () => !M.rateFor('UTM', date) || !ufEnd();
-  let updating = missing() && navigator.onLine !== false;
+  let updating = (missing() || ufCalc()) && navigator.onLine !== false;
   if (updating) {
     // la UF del último día del mes, puntual (liviana); la UTM viene con la consulta del día
-    Promise.all([ufEnd() ? null : FX.fetchRateOn('UF', M.monthEnd(ym)), M.rateFor('UTM', date) ? null : FX.refreshRates({ force: true }).catch(() => {})]).catch(() => {}).finally(() => {
+    Promise.all([ufEnd() && !ufCalc() ? null : FX.fetchRateOn('UF', M.monthEnd(ym)), M.rateFor('UTM', date) ? null : FX.refreshRates({ force: true }).catch(() => {})]).catch(() => {}).finally(() => {
       updating = false;
       const fresh = M.payrollFor(ym);
       p.uf = fresh.uf; p.utm = fresh.utm;
@@ -168,7 +170,7 @@ export function openPayroll(ym) {
     const ded = p.deds.reduce((a, d, i) => a + dedAmt(i), 0) + extraDeds.reduce((a, x) => a + (x.amount || 0), 0);
     const ufTxt = `UF $${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p.uf)}`;
     fill(totals, h('div', { class: 'pay-row muted small' }, h('span', null, `Imponible ${M.fmt(r.imponible, base)} · base tributable ${M.fmt(r.base, base)}`),
-      h('span', null, `${ufTxt}${ufEnd() ? ` (${fmtDay(M.monthEnd(ym))})` : updating ? ' (actualizando…)' : ''} · UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
+      h('span', null, `${ufTxt}${ufEnd() ? ` (${fmtDay(M.monthEnd(ym))}${ufCalc() ? ', calculada' : ''})` : updating ? ' (actualizando…)' : ''} · UTM ${M.fmt(p.utm, base)}${M.rateFor('UTM', date) ? '' : ' (estimada)'}`)),
       // sin la UF del último día del mes: se puede escribir la de la liquidación (aparece en ella)
       !ufEnd() && !updating ? h('div', { class: 'alloc-note' }, h('span', null, `Falta la UF del ${fmtDay(M.monthEnd(ym))}: se está usando ${ufTxt}. Puedes escribir la que aparece en tu liquidación.`),
         h('button', { type: 'button', class: 'btn small', onclick: async () => {

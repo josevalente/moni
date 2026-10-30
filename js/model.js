@@ -1940,12 +1940,29 @@ export function payrollCalc(haberes, deds, { uf, utm }) {
   deds.forEach((d, i) => { if ((d.calc || {}).type === 'impuesto') amounts[i] = impuestoUnico(base, utm); });
   return { imponible: imp, leyes, base, amounts };
 }
+// UF de una fecha aunque aún no esté guardada: entre el día 10 de un mes y el 9 del siguiente la UF sube cada
+// día en la misma proporción (la inflación del mes anterior repartida), así que con dos valores de ese período
+// se calcula la de cualquier otro día del período (ej. la del último día del mes antes de que llegue).
+// Devuelve { rate, calc } o null.
+export function ufOn(date) {
+  const exact = seriesAt('UF', date);
+  if (exact && exact.date === date) return { rate: exact.rate, calc: false };
+  const [y, m, d] = date.split('-').map(Number);
+  const p0 = d >= 10 ? `${date.slice(0, 8)}10` : new Date(Date.UTC(y, m - 2, 10)).toISOString().slice(0, 10);
+  const p1 = d >= 10 ? new Date(Date.UTC(y, m, 9)).toISOString().slice(0, 10) : `${date.slice(0, 8)}09`;
+  const known = db.all('rates').filter(r => r.cur === 'UF' && r.date >= p0 && r.date <= p1 && r.date !== date).sort((a, b) => a.date.localeCompare(b.date));
+  if (known.length < 2) return null;
+  const k0 = known[0], k1 = known.at(-1);
+  const days = (a, b) => (Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 864e5;
+  const g = Math.pow(k1.rate / k0.rate, 1 / days(k0.date, k1.date));
+  return { rate: Math.round(k1.rate * Math.pow(g, days(k1.date, date)) * 100) / 100, calc: true };
+}
 // la liquidación programada de un mes: sus haberes y descuentos (con su monto), con la UF y UTM dadas o las del día
 export function payrollFor(ym, { date = null, uf = null, utm = null, haberes = null } = {}) {
   const inMonth = schedules().filter(s => (s.payroll || s.calc) && scheduleMonths(s, ym, ym).length && !(s.skipped || []).includes(ym));
   const d = date || scheduleDate(inMonth[0] || { day: 1 }, ym);
   // la liquidación usa la UF del último día del mes (topes y plan de la Isapre), aunque se pague antes
-  const ufv = uf || rateFor('UF', monthEnd(ym)) || rateFor('UF', d) || 0;
+  const ufv = uf || (ufOn(monthEnd(ym)) || {}).rate || rateFor('UF', d) || 0;
   const utmv = utm || utmAt(d, ufv);
   const hs = haberes || inMonth.filter(s => s.payroll).map(s => ({ s, amount: s.uf ? Math.round(s.uf * ufv) : s.amount, imponible: s.payroll === 'imp' }));
   const deds = inMonth.filter(s => s.calc);
