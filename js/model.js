@@ -946,7 +946,7 @@ export function cashForecast({ months = 12, rent = null, spend: spendOverride = 
   const ufToday = rateFor('UF', todayStr()) || 1;
   const utmToday = utmAt(todayStr(), ufToday);
   // valor de un programado en un mes con la UF dada (la UTM sube con ella)
-  const schedValue = (x, ym, uf) => (x.calc ? (payrollFor(ym, { uf, utm: utmToday * uf / ufToday }).deds.find(d => d.s.id === x.id) || { amount: 0 }).amount
+  const schedValue = (x, ym, uf) => (isPayrollCalc(x.calc) ? (payrollFor(ym, { uf, utm: utmToday * uf / ufToday }).deds.find(d => d.s.id === x.id) || { amount: 0 }).amount
     : x.uf ? x.uf * uf : x.amount * (x.currency === 'UF' ? uf : (rateFor(x.currency, todayStr()) ?? 1)));
   const covers = { in: new Map(), out: new Map() };
   for (const x of recurring) {
@@ -1797,8 +1797,18 @@ export function nthWeekday(ym, n, wd) {
 }
 export const scheduleDate = (s, ym) => {
   const d = s.nth ? nthWeekday(ym, s.nth.n, s.nth.wd) : Math.min(s.day || 1, Number(monthEnd(ym).slice(8)));
-  return `${ym}-${String(d).padStart(2, '0')}`;
+  const date = `${ym}-${String(d).padStart(2, '0')}`;
+  // un día del mes que cae en fin de semana o feriado: el hábil anterior (ej. "o el día hábil bancario
+  // inmediatamente anterior", como cobran los créditos) o el siguiente
+  return !s.nth && (s.shift === 'prev' || s.shift === 'next') ? shiftToBusiness(date, s.shift) : date;
 };
+export const isBusinessDay = (date) => { const w = new Date(date + 'T12:00:00Z').getUTCDay(); return w !== 0 && w !== 6 && !holidaysCL(Number(date.slice(0, 4))).has(date); };
+function shiftToBusiness(date, dir) {
+  let x = date;
+  for (let i = 0; i < 10 && !isBusinessDay(x); i++) x = addDays(x, dir === 'prev' ? -1 : 1);
+  return x;
+}
+export const SHIFTS = [['', 'Ese mismo día'], ['prev', 'El día hábil anterior'], ['next', 'El día hábil siguiente']];
 // "día 5" o "primer lunes"
 export const scheduleWhen = (s) => (s.nth ? `${(NTHS.find(x => x[0] === s.nth.n) || [0, ''])[1].toLowerCase()} ${wdName(s.nth.wd)}` : `día ${s.day}`);
 // el n-ésimo día de la semana que corresponde a una fecha (para proponerlo): el 27-oct-2026 es el último martes
@@ -1840,7 +1850,8 @@ export function nextOccurrence(s) {
 }
 // monto de una fecha: fijo, o en UF con la UF de ese día (convertida a la moneda del programado)
 export function scheduleAmount(s, date) {
-  if (s.calc) { const p = payrollFor(date.slice(0, 7), { date }); const d = p.deds.find(x => x.s.id === s.id); return d ? d.amount : s.amount; }
+  if (s.calc && s.calc.type === 'dividendo') return dividendAmount(s, date);
+  if (isPayrollCalc(s.calc)) { const p = payrollFor(date.slice(0, 7), { date }); const d = p.deds.find(x => x.s.id === s.id); return d ? d.amount : s.amount; }
   if (!s.uf) return s.amount;
   const uf = rateFor('UF', date), r = rateFor(s.currency, date) ?? 1;
   return uf ? Math.round(s.uf * uf / r * (currencyInfo(s.currency).decimals ? 100 : 1)) / (currencyInfo(s.currency).decimals ? 100 : 1) : s.amount;
@@ -1914,6 +1925,29 @@ export function realRentTags() {
 // - Impuesto único: tabla mensual del SII en UTM, sobre lo imponible menos esas cotizaciones.
 // Los topes cambian cada año (estos son de 2026): revisar en febrero.
 export const PAYROLL_TOPES = { afpUF: 90, cesantiaUF: 135.2 };
+export const isPayrollCalc = (c) => !!c && ['afp', 'salud', 'cesantia', 'impuesto'].includes(c.type);
+export const isPayrollSched = (s) => !!(s && (s.payroll || isPayrollCalc(s.calc)));
+// dividendo de un crédito con tabla de desarrollo (su categoría está asociada al crédito): el total de la cuota
+// que vence ese mes, con sus seguros (y en la primera, lo que el banco cobre por única vez), a la UF del día de pago
+export function dividendAmount(s, date) {
+  const cat = category(s.categoryId);
+  const d = cat && cat.debtId && db.get('debts', cat.debtId);
+  if (!d || !d.mortgage) return s.amount;
+  const n = monthDiff(d.mortgage.first.slice(0, 7), date.slice(0, 7)) + 1;
+  const row = d.mortgage.rows[n - 1];
+  if (!row) return 0;
+  const rate = d.currency === 'UF' ? ((ufOn(date) || {}).rate || rateFor('UF', date) || 0) : (rateFor(d.currency, date) ?? 1);
+  return Math.round(row[6] * rate / (rateFor(s.currency, date) ?? 1));
+}
+// la cuota de la tabla que vence en un mes (para mostrarla en UF)
+export function dividendRow(s, ym) {
+  const cat = category(s.categoryId);
+  const d = cat && cat.debtId && db.get('debts', cat.debtId);
+  if (!d || !d.mortgage) return null;
+  const n = monthDiff(d.mortgage.first.slice(0, 7), ym) + 1;
+  const row = d.mortgage.rows[n - 1];
+  return row ? { n, total: row[6], currency: d.currency, debt: d } : null;
+}
 export const CALC = [['afp', 'AFP: % de lo imponible'], ['salud', 'Salud: 7% o el plan en UF (el mayor)'], ['cesantia', 'Seguro de cesantía: % de lo imponible'], ['impuesto', 'Impuesto único (tabla del SII)']];
 // tramos del impuesto único de segunda categoría: hasta (UTM), factor y cantidad a rebajar (UTM)
 const IUT = [[13.5, 0, 0], [30, 0.04, 0.54], [50, 0.08, 1.74], [70, 0.135, 4.49], [90, 0.23, 11.14], [120, 0.304, 17.8], [310, 0.35, 23.32], [Infinity, 0.4, 38.82]];
@@ -1959,13 +1993,13 @@ export function ufOn(date) {
 }
 // la liquidación programada de un mes: sus haberes y descuentos (con su monto), con la UF y UTM dadas o las del día
 export function payrollFor(ym, { date = null, uf = null, utm = null, haberes = null } = {}) {
-  const inMonth = schedules().filter(s => (s.payroll || s.calc) && scheduleMonths(s, ym, ym).length && !(s.skipped || []).includes(ym));
+  const inMonth = schedules().filter(s => isPayrollSched(s) && scheduleMonths(s, ym, ym).length && !(s.skipped || []).includes(ym));
   const d = date || scheduleDate(inMonth[0] || { day: 1 }, ym);
   // la liquidación usa la UF del último día del mes (topes y plan de la Isapre), aunque se pague antes
   const ufv = uf || (ufOn(monthEnd(ym)) || {}).rate || rateFor('UF', d) || 0;
   const utmv = utm || utmAt(d, ufv);
   const hs = haberes || inMonth.filter(s => s.payroll).map(s => ({ s, amount: s.uf ? Math.round(s.uf * ufv) : s.amount, imponible: s.payroll === 'imp' }));
-  const deds = inMonth.filter(s => s.calc);
+  const deds = inMonth.filter(s => isPayrollCalc(s.calc));
   const r = payrollCalc(hs, deds, { uf: ufv, utm: utmv });
   return { ...r, haberes: hs, deds: deds.map((s, i) => ({ s, amount: r.amounts[i] })), uf: ufv, utm: utmv };
 }

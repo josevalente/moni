@@ -224,6 +224,7 @@ export function openTxForm(existing, defaults = {}) {
   const repWdSel = h('select', { 'aria-label': 'Día de la semana' }, [1, 2, 3, 4, 5, 6, 0].map(v => h('option', { value: String(v) }, M.WEEKDAYS[v])),
     h('option', { value: 'h' }, 'día hábil'));            // lunes a viernes sin feriados de Chile
   const repEndIn = h('input', { type: 'month', 'aria-label': 'Hasta (opcional)' });
+  const repShiftSel = h('select', { 'aria-label': 'Si cae en fin de semana o feriado' }, M.SHIFTS.map(([v, l]) => h('option', { value: v }, l)));
   // lo elegido en los campos de Repetir (se lee al cambiar y otra vez al guardar)
   const readRepeat = () => {
     if (!s.repeat) return;
@@ -231,9 +232,10 @@ export function openTxForm(existing, defaults = {}) {
     if (d >= 1 && d <= 31) s.repeat.day = d;
     s.repeat.nth = { n: Number(repNthSel.value), wd: repWdSel.value === 'h' ? 'h' : Number(repWdSel.value) };
     s.repeat.end = repEndIn.value || '';
+    s.repeat.shift = repShiftSel.value || '';
   };
   for (const ev of ['input', 'change']) {
-    for (const el of [repDayIn, repNthSel, repWdSel]) el.addEventListener(ev, () => { readRepeat(); updateSummaryLabels(); repWhen(); });
+    for (const el of [repDayIn, repNthSel, repWdSel, repShiftSel]) el.addEventListener(ev, () => { readRepeat(); updateSummaryLabels(); repWhen(); });
     repEndIn.addEventListener(ev, readRepeat);
   }
   // la explicación de cuándo aparece se actualiza sin redibujar (redibujar cerraría el teclado o el selector)
@@ -694,7 +696,7 @@ export function openTxForm(existing, defaults = {}) {
           if (!s.repeat.nth) s.repeat.nth = M.nthOfDate(s.date);
           if (!s.repeat.mode) s.repeat.mode = 'day';
           repDayIn.value = String(s.repeat.day); repEndIn.value = s.repeat.end || '';
-          repNthSel.value = String(s.repeat.nth.n); repWdSel.value = String(s.repeat.nth.wd);
+          repNthSel.value = String(s.repeat.nth.n); repWdSel.value = String(s.repeat.nth.wd); repShiftSel.value = s.repeat.shift || '';
           repWhen();
         }
         const week = s.repeat && s.repeat.mode === 'week';
@@ -704,7 +706,8 @@ export function openTxForm(existing, defaults = {}) {
           s.repeat ? h('div', { class: 'rep-fields' + (week ? ' three' : '') },
             week ? [h('label', { class: 'fc-field' }, h('span', null, 'Cuál'), repNthSel), h('label', { class: 'fc-field' }, h('span', null, 'Día'), repWdSel)]
               : h('label', { class: 'fc-field' }, h('span', null, 'Día del mes'), repDayIn),
-            h('label', { class: 'fc-field' }, h('span', null, 'Hasta (opcional)'), repEndIn)) : null,
+            h('label', { class: 'fc-field' }, h('span', null, 'Hasta (opcional)'), repEndIn),
+            week ? null : h('label', { class: 'fc-field rep-shift' }, h('span', null, 'Si cae en fin de semana o feriado'), repShiftSel)) : null,
           s.repeat ? repTxRow : null,
           s.repeat ? repHint : null));
       }
@@ -810,7 +813,7 @@ export function openTxForm(existing, defaults = {}) {
       const sc = {
         id: db.uid(), desc: tx.desc, kind: tx.kind, amount: tx.amount, currency: tx.currency, accountId: tx.accountId, categoryId: tx.categoryId,
         alloc: tx.alloc, paidBy: tx.paidBy, ...(tx.tag ? { tag: tx.tag } : {}), ...(ufAmount != null ? { uf: ufAmount } : {}),
-        day: rep ? rep.day : Number(s.date.slice(8)), ...(rep && rep.mode === 'week' ? { nth: rep.nth } : {}),
+        day: rep ? rep.day : Number(s.date.slice(8)), ...(rep && rep.mode === 'week' ? { nth: rep.nth } : rep && rep.shift ? { shift: rep.shift } : {}),
         every: rep ? rep.every : 0, end: (rep && rep.end) || null,
       };
       // con la casilla desmarcada (o fecha futura) solo se programa

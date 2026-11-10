@@ -58,7 +58,7 @@ export function editSchedule(sc) {
   formModal({
     title: sc.kind === 'in' ? 'Ingreso programado' : 'Gasto programado',
     value: { ...sc, end: sc.end || '', every: String(sc.every), accountId: sc.accountId || '', tag: sc.tag || '',
-      payroll: sc.payroll || '', calcType: (sc.calc || {}).type || '', calcPct: (sc.calc || {}).pct ?? null, calcPlanUF: (sc.calc || {}).planUF ?? null,
+      payroll: sc.payroll || '', calcType: (sc.calc || {}).type || '', calcPct: (sc.calc || {}).pct ?? null, calcPlanUF: (sc.calc || {}).planUF ?? null, shift: sc.shift || '',
       mode: sc.nth ? 'week' : 'day', nthN: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).n), nthWd: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).wd) },
     fields: [
       { key: 'desc', label: 'Descripción', type: 'text' },
@@ -67,7 +67,9 @@ export function editSchedule(sc) {
       { key: 'tag', label: 'Etiqueta (opcional)', type: 'text' },
       // del sueldo: un haber se marca imponible o no; un descuento legal se calcula sobre lo imponible del mes
       ...(sc.kind === 'in' ? [{ key: 'payroll', label: 'En la liquidación de sueldo', type: 'select', options: [{ v: '', l: 'No es parte del sueldo' }, { v: 'imp', l: 'Haber imponible (sueldo, gratificación, bonos)' }, { v: 'noimp', l: 'Haber no imponible (colación, movilización)' }] }]
-        : [{ key: 'calcType', label: 'Monto', type: 'select', options: [{ v: '', l: 'Fijo (o en UF)' }, ...M.CALC.map(([v, l]) => ({ v, l: `Calculado · ${l}` }))], hint: 'Calculado: cada mes sobre los haberes imponibles programados del sueldo.' },
+        : [{ key: 'calcType', label: 'Monto', type: 'select', options: [{ v: '', l: 'Fijo (o en UF)' }, ...M.CALC.map(([v, l]) => ({ v, l: `Calculado · ${l}` })),
+          // la categoría de un crédito con tabla: su cuota de cada mes
+          ...(((M.category(sc.categoryId) || {}).debtId) ? [{ v: 'dividendo', l: 'Según la tabla del crédito (la cuota de cada mes, a la UF del día)' }] : [])], hint: 'Calculado: los descuentos del sueldo, cada mes sobre los haberes imponibles programados; el dividendo, con la cuota de la tabla del crédito.' },
           { key: 'calcPct', label: 'Porcentaje', type: 'number', show: (v) => v.calcType === 'afp' || v.calcType === 'cesantia', hint: 'AFP: la tasa de la tuya, ej. 11,44. Seguro de cesantía: 0,6 con contrato indefinido.' },
           { key: 'calcPlanUF', label: 'Plan de la Isapre (UF al mes)', type: 'number', show: (v) => v.calcType === 'salud', hint: 'Se descuenta el mayor entre el 7% de lo imponible y el plan. En Fonasa, déjalo vacío.' }]),
       ...(ufOk ? [{ key: 'uf', label: 'Monto fijo en UF (opcional)', type: 'number', calc: true, show: (v) => !v.calcType, hint: 'Acepta operaciones, ej. 8,5 × 1,19. Cada vez se registra con la UF de ese día. Vacío: monto fijo en pesos.' }] : []),
@@ -77,6 +79,7 @@ export function editSchedule(sc) {
       { key: 'nthN', label: 'Cuál', type: 'select', options: M.NTHS.map(([v, l]) => ({ v: String(v), l })), show: (v) => v.mode === 'week' },
       { key: 'nthWd', label: 'Día de la semana', type: 'select', options: [...[1, 2, 3, 4, 5, 6, 0].map(v => ({ v: String(v), l: M.WEEKDAYS[v] })), { v: 'h', l: 'día hábil (lunes a viernes sin feriados)' }], show: (v) => v.mode === 'week' },
       { key: 'every', label: 'Se repite', type: 'select', options: M.EVERY.map(([v, l]) => ({ v: String(v), l })) },
+      { key: 'shift', label: 'Si cae en fin de semana o feriado', type: 'select', options: M.SHIFTS.map(([v, l]) => ({ v, l })), show: (v) => v.mode !== 'week' },
       { key: 'end', label: 'Hasta (AAAA-MM, opcional)', type: 'month' },
     ],
     extra: h('div', null,
@@ -90,6 +93,7 @@ export function editSchedule(sc) {
       if (v.end && !/^\d{4}-\d{2}$/.test(v.end)) { toast('Hasta: usa AAAA-MM'); return false; }
       const out = { ...db.get('schedules', sc.id), desc: v.desc, day, every: Number(v.every), end: v.end || null, categoryId: v.categoryId };
       if (week) out.nth = { n: Number(v.nthN), wd: v.nthWd === 'h' ? 'h' : Number(v.nthWd) }; else delete out.nth;
+      if (!week && v.shift) out.shift = v.shift; else delete out.shift;
       if (v.tag) out.tag = v.tag.trim(); else delete out.tag;
       // la cuenta define la moneda del movimiento
       if ('accountId' in v) { out.accountId = v.accountId || null; const a = out.accountId && M.account(out.accountId); if (a) out.currency = a.currency; }
@@ -99,7 +103,7 @@ export function editSchedule(sc) {
       if (v.payroll) out.payroll = v.payroll; else delete out.payroll;
       if (v.calcType) {
         if ((v.calcType === 'afp' || v.calcType === 'cesantia') && !(v.calcPct > 0)) { toast('Falta el porcentaje'); return false; }
-        out.calc = { type: v.calcType, ...(v.calcPct > 0 ? { pct: v.calcPct } : {}), ...(v.calcType === 'salud' && v.calcPlanUF > 0 ? { planUF: v.calcPlanUF } : {}) };
+        out.calc = { type: v.calcType, ...(v.calcPct > 0 && v.calcType !== 'dividendo' ? { pct: v.calcPct } : {}), ...(v.calcType === 'salud' && v.calcPlanUF > 0 ? { planUF: v.calcPlanUF } : {}) };
         delete out.uf;
       } else {
         delete out.calc;

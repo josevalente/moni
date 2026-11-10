@@ -116,11 +116,12 @@ function pendingRow(i, ref, root) {
     icon = (cat && cat.icon) || (i.s.kind === 'in' ? '💰' : '🔁');
     title = occurrenceTitle(i);
     const when = new Date(i.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
-    sub = `${isOverdue(i) ? `⚠️ era el ${when}` : i.due ? 'hoy' : `el ${when}`} · ${i.s.kind === 'in' ? 'ingreso ' : ''}${M.fmt(amt, i.s.currency)}${i.s.uf ? ` (${new Intl.NumberFormat('es-CL').format(i.s.uf)} UF)` : ''}`;
+    const div = i.s.calc && i.s.calc.type === 'dividendo' ? M.dividendRow(i.s, i.ym) : null;
+    sub = `${isOverdue(i) ? `⚠️ era el ${when}` : i.due ? 'hoy' : `el ${when}`} · ${i.s.kind === 'in' ? 'ingreso ' : ''}${M.fmt(amt, i.s.currency)}${i.s.uf ? ` (${new Intl.NumberFormat('es-CL').format(i.s.uf)} UF)` : ''}${div ? ` (cuota ${div.n}: ${new Intl.NumberFormat('es-CL', { maximumFractionDigits: 4 }).format(div.total)} ${div.currency})` : ''}`;
     action = [
       h('button', { class: 'btn small', onclick: () => registerOccurrences([i]) }, 'Registrar'),
       // del sueldo: se ajusta toda la liquidación (los descuentos dependen de los haberes)
-      h('button', { class: 'btn small ghost', 'aria-label': `Ajustar antes de registrar: ${title}`, onclick: () => ((i.s.payroll || i.s.calc) ? openPayroll(i.ym) : openOccurrence(i)) }, 'Ajustar')];
+      h('button', { class: 'btn small ghost', 'aria-label': `Ajustar antes de registrar: ${title}`, onclick: () => (M.isPayrollSched(i.s) ? openPayroll(i.ym) : openOccurrence(i)) }, 'Ajustar')];
   } else if (i.type === 'bill') {
     icon = i.cat.icon || '🧾';
     title = i.cat.name;
@@ -228,7 +229,7 @@ function pendingCard(root) {
         h('div', { class: 'title' }, `${schedDue.length} programados para confirmar`),
         h('div', { class: 'sub' }, `${schedDue.slice(0, 3).map(occurrenceTitle).join(', ')}${schedDue.length > 3 ? ` y ${schedDue.length - 3} más` : ''}`)),
       h('div', { class: 'row-actions' },
-        schedDue.some(i => i.s.payroll || i.s.calc) ? h('button', { class: 'btn small', onclick: () => openPayroll(schedDue.find(i => i.s.payroll || i.s.calc).ym) }, 'Liquidación') : null,
+        schedDue.some(i => M.isPayrollSched(i.s)) ? h('button', { class: 'btn small', onclick: () => openPayroll(schedDue.find(i => M.isPayrollSched(i.s)).ym) }, 'Liquidación') : null,
         h('button', { class: 'btn small primary', onclick: () => registerOccurrences(schedDue) }, 'Registrar todos'))) : null,
     schedGrouped ? h('button', { class: 'link-row small', onclick: () => { st.schedOpen = !st.schedOpen; renderHome(root); } }, st.schedOpen ? 'Ocultar el detalle' : 'Ver uno por uno (o ajustar)') : null,
     schedGrouped && st.schedOpen ? schedDue.map(i => pendingRow(i, ref, root)) : null,
