@@ -178,7 +178,7 @@ export function openPayroll(ym) {
       // sin la UF del último día del mes: se puede escribir la de la liquidación (aparece en ella)
       !ufEnd() && !updating ? h('div', { class: 'alloc-note' }, h('span', null, `Falta la UF del ${fmtDay(M.monthEnd(ym))}: se está usando ${ufTxt}. Puedes escribir la que aparece en tu liquidación.`),
         h('button', { type: 'button', class: 'btn small', onclick: async () => {
-          const v = await promptDialog(`UF del ${fmtDay(M.monthEnd(ym))}`, { label: 'Valor de la UF', type: 'number', hint: 'Ej. 41.247,63' });
+          const v = await promptDialog(`UF del ${fmtDay(M.monthEnd(ym))}`, { label: 'Valor de la UF', type: 'number', hint: 'Ej. 40.000,00 (aparece en la liquidación)' });
           const n = v == null ? NaN : M.parseAmount(v);
           if (!(n > 1000)) return;
           await FX.setManualRate('UF', M.monthEnd(ym), n);
