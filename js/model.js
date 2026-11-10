@@ -1976,13 +1976,15 @@ export function payrollCalc(haberes, deds, { uf, utm }) {
 }
 // UF de una fecha aunque aún no esté guardada: entre el día 10 de un mes y el 9 del siguiente la UF sube cada
 // día en la misma proporción (la inflación del mes anterior repartida), así que con dos valores de ese período
-// se calcula la de cualquier otro día del período (ej. la del último día del mes antes de que llegue).
+// se calcula la de cualquier otro día del período (ej. la del último día del mes antes de que llegue). El día 9
+// también sirve: es el punto de partida del período (la del 10 sale de la del 9), así que basta con la de hoy.
+// Con pocos días conocidos puede diferir en algún centavo de UF; con más, calza exacta.
 // Devuelve { rate, calc } o null.
 export function ufOn(date) {
   const exact = seriesAt('UF', date);
   if (exact && exact.date === date) return { rate: exact.rate, calc: false };
   const [y, m, d] = date.split('-').map(Number);
-  const p0 = d >= 10 ? `${date.slice(0, 8)}10` : new Date(Date.UTC(y, m - 2, 10)).toISOString().slice(0, 10);
+  const p0 = d >= 10 ? `${date.slice(0, 8)}09` : new Date(Date.UTC(y, m - 2, 9)).toISOString().slice(0, 10);
   const p1 = d >= 10 ? new Date(Date.UTC(y, m, 9)).toISOString().slice(0, 10) : `${date.slice(0, 8)}09`;
   const known = db.all('rates').filter(r => r.cur === 'UF' && r.date >= p0 && r.date <= p1 && r.date !== date).sort((a, b) => a.date.localeCompare(b.date));
   if (known.length < 2) return null;

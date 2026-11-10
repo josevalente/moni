@@ -632,6 +632,7 @@ function applePayHelp() {
 
 // ---------------------------------------------------------------- menú
 export function renderMore(root, sub) {
+  const versionLine = h('span');
   const subs = { categorias: renderCategories, cuentas: renderAccounts, personas: renderPeople, reparto: renderSplits, monedas: renderCurrencies, respaldo: renderBackup };
   if (sub === 'inversiones') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Inversiones'), inner); renderInvest(inner); return () => renderInvest(inner); }
   if (sub === 'propiedades') { fill(root); const inner = h('div'); root.append(back(), h('h2', null, 'Propiedades'), inner); renderProperties(inner); return () => renderProperties(inner); }
@@ -659,5 +660,7 @@ export function renderMore(root, sub) {
       h('button', { class: 'row link', onclick: applePayHelp }, h('div', { class: 'icon' }, '⚡'),
         h('div', { class: 'main' }, h('div', { class: 'title' }, 'Atajos del iPhone'), h('div', { class: 'sub' }, 'Gasto rápido con Siri y compras de Apple Pay: en Moni las pegas con 📋')),
         h('div', { class: 'chev' }, '›'))),
-    h('p', { class: 'muted center small' }, 'Moni · tus datos se guardan solo en este dispositivo'));
+    h('p', { class: 'muted center small' }, 'Moni · tus datos se guardan solo en este dispositivo', versionLine));
+  // la versión instalada (la caché del service worker): sirve para saber si ya llegó una actualización
+  try { caches.keys().then(k => { const v = k.filter(x => /^moni-v\d+$/.test(x)).map(x => Number(x.slice(6))).sort((a, b) => b - a)[0]; if (v) versionLine.textContent = ` · versión ${v}`; }).catch(() => {}); } catch { /* sin caché */ }
 }
