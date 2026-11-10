@@ -23,7 +23,10 @@ export function refreshRates({ force = false } = {}) {
 async function doRefresh(force) {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return { ok: false, reason: 'offline' };
   const today = todayStr();
-  if (!force && fetchedToday()) return { ok: true, skipped: true, count: 0 };
+  // ya se consultó hoy: no se repite, salvo que aún falte la UF de hoy y hayan pasado 2 horas (si se consultó
+  // temprano, antes de que se publicara, el día se quedaba con la del día anterior)
+  const ufMissing = base() !== 'UF' && (lastRateDate('UF') || '') < today && Date.now() - (lastFetchAt() || 0) > 2 * 3600e3;
+  if (!force && fetchedToday() && !ufMissing) return { ok: true, skipped: true, count: 0 };
   const recs = [];
   let failed = 0;
   const codes = [...new Set(Object.values(MAP))];

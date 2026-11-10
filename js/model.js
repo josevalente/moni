@@ -2036,7 +2036,8 @@ export function recurringBills(ref = curYm()) {
     const sd = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
     const sorted = [...vals].sort((a, b) => a - b);
     const days = [...e.days].sort((a, b) => a - b);
-    out.push({ catId: e.cat.id, cat: e.cat, median: sorted[Math.floor(sorted.length / 2)], fixed: mean > 0 && sd / mean <= 0.05, day: days[Math.floor(days.length / 2)], template: e.last });
+    // un dividendo (categoría de un crédito) varía con la UF aunque casi no cambie: se confirma con su monto real
+    out.push({ catId: e.cat.id, cat: e.cat, median: sorted[Math.floor(sorted.length / 2)], fixed: mean > 0 && sd / mean <= 0.05 && !e.cat.debtId, day: days[Math.floor(days.length / 2)], template: e.last });
   }
   return out.sort((a, b) => a.day - b.day || a.cat.name.localeCompare(b.cat.name));
 }

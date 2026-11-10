@@ -16,8 +16,16 @@ function occurrenceTx(o) {
   return tx;
 }
 
+// los que dependen de la UF de su fecha: si aún no está guardada (hoy o antes), se consulta primero
+const needsUF = (o) => !!(o.s.uf || o.s.calc || o.s.currency === 'UF') && o.date <= M.todayStr();
+async function ensureUF(list) {
+  const dates = [...new Set(list.filter(needsUF).map(o => o.date))].filter(d => { const r = M.seriesAt('UF', d); return !(r && r.date === d); });
+  if (dates.length) await Promise.all(dates.map(d => FX.fetchRateOn('UF', d)));
+}
+
 // Confirmar en un toque (o varios a la vez, con un solo "Deshacer")
 export async function registerOccurrences(list) {
+  await ensureUF(list);
   const txs = list.map(occurrenceTx);
   await db.putMany('tx', txs);
   toast(txs.length === 1 ? `${occurrenceTitle(list[0])} registrado: ${M.fmt(txs[0].amount, txs[0].currency)}` : `${txs.length} programados registrados`,
@@ -25,7 +33,8 @@ export async function registerOccurrences(list) {
 }
 
 // Confirmar ajustando (monto, fecha, cuenta…): el formulario queda listo
-export function openOccurrence(o) {
+export async function openOccurrence(o) {
+  await ensureUF([o]);
   const t = occurrenceTx(o);
   openTxForm(null, {
     kind: t.kind, date: t.date, amount: numText(o.s.uf || t.amount), entryUF: !!o.s.uf, currency: t.currency, accountId: t.accountId, categoryId: t.categoryId,
