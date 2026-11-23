@@ -66,7 +66,7 @@ export function editSchedule(sc) {
   const done = M.sortTx(db.all('tx').filter(t => t.scheduleId === sc.id)).slice(0, 6);
   formModal({
     title: sc.kind === 'in' ? 'Ingreso programado' : 'Gasto programado',
-    value: { ...sc, end: sc.end || '', every: String(sc.every), accountId: sc.accountId || '', tag: sc.tag || '',
+    value: { ...sc, end: sc.end || '', every: sc.months && sc.months.length ? 'months' : String(sc.every), months: sc.months || [], accountId: sc.accountId || '', tag: sc.tag || '',
       payroll: sc.payroll || '', calcType: (sc.calc || {}).type || '', calcPct: (sc.calc || {}).pct ?? null, calcPlanUF: (sc.calc || {}).planUF ?? null, shift: sc.shift || '',
       mode: sc.nth ? 'week' : 'day', nthN: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).n), nthWd: String((sc.nth || M.nthOfDate(M.scheduleDate(sc, sc.start))).wd) },
     fields: [
@@ -87,7 +87,18 @@ export function editSchedule(sc) {
       { key: 'day', label: 'Día del mes', type: 'number', required: true, show: (v) => v.mode !== 'week', hint: 'Con 31, el último día de cada mes.' },
       { key: 'nthN', label: 'Cuál', type: 'select', options: M.NTHS.map(([v, l]) => ({ v: String(v), l })), show: (v) => v.mode === 'week' },
       { key: 'nthWd', label: 'Día de la semana', type: 'select', options: [...[1, 2, 3, 4, 5, 6, 0].map(v => ({ v: String(v), l: M.WEEKDAYS[v] })), { v: 'h', l: 'día hábil (lunes a viernes sin feriados)' }], show: (v) => v.mode === 'week' },
-      { key: 'every', label: 'Se repite', type: 'select', options: M.EVERY.map(([v, l]) => ({ v: String(v), l })) },
+      { key: 'every', label: 'Se repite', type: 'select', options: [...M.EVERY.map(([v, l]) => ({ v: String(v), l })), { v: 'months', l: 'Ciertos meses del año (ej. contribuciones)' }] },
+      { key: 'months', label: 'Meses', type: 'custom', show: (v) => v.every === 'months', build: (val) => {
+        const sel = new Set(val || []);
+        const el = h('div', { class: 'chips month-chips' }, Array.from({ length: 12 }, (_, i) => {
+          const b = h('button', { type: 'button', class: 'chip small' + (sel.has(i + 1) ? ' on' : ''), 'aria-pressed': String(sel.has(i + 1)), onclick: () => {
+            if (sel.has(i + 1)) sel.delete(i + 1); else sel.add(i + 1);
+            b.classList.toggle('on', sel.has(i + 1)); b.setAttribute('aria-pressed', String(sel.has(i + 1)));
+          } }, M.monthName(`2000-${String(i + 1).padStart(2, '0')}`).slice(0, 3));
+          return b;
+        }));
+        return { el, get: () => [...sel].sort((a, b) => a - b) };
+      } },
       { key: 'shift', label: 'Si cae en fin de semana o feriado', type: 'select', options: M.SHIFTS.map(([v, l]) => ({ v, l })), show: (v) => v.mode !== 'week' },
       { key: 'end', label: 'Hasta (AAAA-MM, opcional)', type: 'month' },
     ],
@@ -100,7 +111,9 @@ export function editSchedule(sc) {
       const day = week ? (sc.day || 1) : Math.round(v.day);
       if (!(day >= 1 && day <= 31)) { toast('El día va de 1 a 31'); return false; }
       if (v.end && !/^\d{4}-\d{2}$/.test(v.end)) { toast('Hasta: usa AAAA-MM'); return false; }
-      const out = { ...db.get('schedules', sc.id), desc: v.desc, day, every: Number(v.every), end: v.end || null, categoryId: v.categoryId };
+      if (v.every === 'months' && !(v.months || []).length) { toast('Elige al menos un mes'); return false; }
+      const out = { ...db.get('schedules', sc.id), desc: v.desc, day, every: v.every === 'months' ? 1 : Number(v.every), end: v.end || null, categoryId: v.categoryId };
+      if (v.every === 'months') out.months = v.months; else delete out.months;
       if (week) out.nth = { n: Number(v.nthN), wd: v.nthWd === 'h' ? 'h' : Number(v.nthWd) }; else delete out.nth;
       if (!week && v.shift) out.shift = v.shift; else delete out.shift;
       if (v.tag) out.tag = v.tag.trim(); else delete out.tag;
@@ -274,7 +287,7 @@ export function renderSchedules(root, back) {
         h('div', { class: 'main' },
           h('div', { class: 'title' }, s.desc || (cat && cat.name) || 'Programado'),
           h('div', { class: 'sub' }, [
-            s.every ? `${M.everyLabel(s.every)}, ${M.scheduleWhen(s)}` : `Una vez, ${fmtDay(M.scheduleDate(s, s.start))}`,
+            s.every ? `${M.repeatLabel(s)}, ${M.scheduleWhen(s)}` : `Una vez, ${fmtDay(M.scheduleDate(s, s.start))}`,
             cat ? cat.name : null, s.tag ? '#' + s.tag : null,
             ended ? 'terminado' : `próximo: ${fmtDay(next.date)}${next.date < today ? ' (sin confirmar)' : ''}`,
             s.end ? `hasta ${M.monthName(s.end).toLowerCase()}` : null,

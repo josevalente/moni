@@ -25,13 +25,20 @@ function numField(label, value, onValue, { hint, suffix } = {}) {
 export function openPrepay(debtId) {
   const d = db.get('debts', debtId);
   if (!d || !d.mortgage) return;
-  const st = { amount: 200 };
-  const out = h('div');
+  const st = { amount: 200, mode: null, date: M.todayStr(), accountId: null, fee: null, interest: null, touched: {} };
+  const out = h('div'), adviceBox = h('div');
+  const line = (l, v, strong) => h('div', { class: 'rent-line' + (strong ? ' strong' : '') }, h('span', null, l), h('b', null, v));
   const draw = () => {
     const s = M.prepaySimulation(d, st.amount);
-    if (!s) { fill(out, h('p', { class: 'empty' }, 'Este crédito ya está pagado.')); return; }
+    if (!s) { fill(out, h('p', { class: 'empty' }, 'Este crédito ya está pagado.')); fill(adviceBox); return; }
     const c = s.cuota, p = s.plazo;
-    const line = (l, v, strong) => h('div', { class: 'rent-line' + (strong ? ' strong' : '') }, h('span', null, l), h('b', null, v));
+    // lo que conviene, con tu caja y tus otros créditos
+    const a = M.prepayAdvice(d, st.amount);
+    if (a && !st.touched.mode) st.mode = a.mode;
+    fill(adviceBox, a ? h('section', { class: 'card advice' + (a.ok ? '' : ' warn-card') },
+      h('h3', null, a.ok ? `Te recomiendo: ${a.mode === 'plazo' ? 'acortar el plazo' : 'bajar el dividendo'}` : 'Ojo con este monto'),
+      h('ul', { class: 'advice-list' }, a.reasons.map(r => h('li', null, r)))) : null);
+    concreteDraw(s);
     fill(out,
       h('p', { class: 'small' }, `Saldo hoy: ${uf(s.balance)} (${clp(s.balance)}), quedan ${s.remaining} cuotas (hasta ${ymLong(s.endNow)}), tasa ${pct(s.annualRate, 2)} anual sobre UF.`),
       h('section', { class: 'card' }, h('h3', null, 'Si bajas el dividendo'),
@@ -46,10 +53,86 @@ export function openPrepay(debtId) {
           p.insuranceSaved > 0.01 ? line('Seguros que no pagas', `${uf(p.insuranceSaved)}`) : null)),
       h('p', { class: 'muted small' }, `Prepagar es como invertir a ${pct(s.annualRate, 2)} sobre la UF sin riesgo: conviene si no tienes una inversión que rinda más después de impuestos y si te queda un colchón para emergencias. Acortar el plazo ahorra más interés; bajar el dividendo libera caja cada mes. El banco puede cobrar una comisión de prepago (hasta 1,5 meses de interés).`));
   };
+
+  // ---- concretarlo: lo que paga el banco, la tabla nueva y el pago desde tu cuenta
+  const accs = M.accounts().filter(x => !x.archived && x.type === 'bank' && x.currency === M.base());
+  const lastDiv = db.all('tx').filter(t => (M.category(t.categoryId) || {}).debtId === d.id && t.accountId).sort((x, y) => (x.date < y.date ? 1 : -1))[0];
+  st.accountId = (lastDiv && lastDiv.accountId) || (accs[0] || {}).id || null;
+  const dateIn = h('input', { type: 'date', value: st.date, 'aria-label': 'Fecha del prepago' });
+  dateIn.addEventListener('change', () => { st.date = dateIn.value || M.todayStr(); draw(); });
+  const accSel = h('select', { 'aria-label': 'Cuenta' }, accs.map(x => h('option', { value: x.id, selected: x.id === st.accountId }, `${x.name} (${x.currency})`)));
+  accSel.addEventListener('change', () => { st.accountId = accSel.value; });
+  const modeBox = h('div');
+  const feeIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Comisión de prepago' });
+  const intIn = h('input', { type: 'text', inputmode: 'decimal', 'aria-label': 'Intereses del período' });
+  feeIn.addEventListener('input', () => { const v = M.parseAmount(feeIn.value); st.fee = Number.isFinite(v) ? v : 0; st.touched.fee = true; concreteDraw(M.prepaySimulation(d, st.amount)); });
+  intIn.addEventListener('input', () => { const v = M.parseAmount(intIn.value); st.interest = Number.isFinite(v) ? v : 0; st.touched.interest = true; concreteDraw(M.prepaySimulation(d, st.amount)); });
+  const resultBox = h('div');
+  const n4 = (v) => nf(4).format(v);
+  function concreteDraw(s) {
+    if (!s) return;
+    const i = Math.pow(1 + s.annualRate, 1 / 12) - 1;
+    // estimaciones si no las escribes: comisión máxima (1,5 meses de interés sobre lo prepagado) e intereses
+    // del prepago desde la última cuota hasta la fecha
+    const k = M.cuotasPaid(d, st.date);
+    const lastDue = k ? `${M.addMonths(d.mortgage.first.slice(0, 7), k - 1)}${d.mortgage.first.slice(7)}` : d.mortgage.from;
+    const days = Math.max(0, (Date.parse(st.date + 'T12:00:00Z') - Date.parse(lastDue + 'T12:00:00Z')) / 864e5);
+    if (!st.touched.fee) { st.fee = Math.round(s.prepay * i * 1.5 * 1e4) / 1e4; feeIn.value = n4(st.fee); }
+    if (!st.touched.interest) { st.interest = Math.round(s.prepay * i * days / 30 * 1e4) / 1e4; intIn.value = n4(st.interest); }
+    fill(modeBox, h('div', { class: 'seg', role: 'group', 'aria-label': 'Modalidad' }, [['plazo', 'Acortar el plazo'], ['dividendo', 'Bajar el dividendo']].map(([v, l]) => h('button', {
+      type: 'button', class: st.mode === v ? 'on' : '', 'aria-pressed': String(st.mode === v), onclick: () => { st.mode = v; st.touched.mode = true; draw(); },
+    }, l))));
+    const total = s.prepay + (st.fee || 0) + (st.interest || 0);
+    const after = M.prepaidMortgage(d, { date: st.date, amount: st.amount, mode: st.mode, fee: st.fee, interest: st.interest });
+    const k2 = M.cuotasPaid(d, st.date);
+    const nr = after && after.mortgage.rows[k2];
+    fill(resultBox,
+      line('Pagas al banco', `${uf(total)} · ${clp(total)}`, true),
+      h('div', { class: 'muted small' }, `Prepago ${uf(s.prepay)} + comisión ${uf(st.fee || 0)} + intereses ${uf(st.interest || 0)}`),
+      nr ? line('Próximo dividendo', `${uf(nr[6])} (antes ${uf(d.mortgage.rows[k2][6])})`) : null,
+      after ? line('Última cuota', `${ymLong(M.addMonths(d.mortgage.first.slice(0, 7), after.mortgage.rows.length - 1))} (${after.mortgage.rows.length - k2} cuotas)`) : null);
+  }
+  async function concretar() {
+    const s = M.prepaySimulation(d, st.amount);
+    if (!s || !(st.amount > 0)) { toast('Escribe el monto del prepago'); return; }
+    const ufd = d.currency === 'UF' ? ((M.ufOn(st.date) || {}).rate || M.rateFor('UF', st.date)) : (M.rateFor(d.currency, st.date) ?? 1);
+    if (!ufd) { toast('Falta la UF de esa fecha'); return; }
+    const after = M.prepaidMortgage(d, { date: st.date, amount: st.amount, mode: st.mode, fee: st.fee, interest: st.interest });
+    if (!after) return;
+    const acc = M.account(st.accountId);
+    const cost = (st.fee || 0) + (st.interest || 0);
+    const ok = await confirmDialog(`Se registra el prepago de ${uf(s.prepay)} (${M.fmt(s.prepay * ufd, M.base())}) y ${uf(cost)} de comisión e intereses (${M.fmt(cost * ufd, M.base())}) desde ${acc ? acc.name : 'sin cuenta'}, el ${new Date(st.date + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}. La tabla de ${d.name} se rehace (${st.mode === 'plazo' ? 'mismo dividendo, menos cuotas' : 'mismas cuotas, dividendo menor'}) y el dividendo programado usa la nueva.`, { ok: 'Registrar prepago', danger: false });
+    if (!ok) return;
+    // categorías: el prepago baja la deuda (no es gasto); la comisión y los intereses sí son gasto
+    const ensureCat = async (name, kind) => M.categories().find(c => c.name === name) || db.put('categories', { name, kind, group: 'Propiedades', order: 99 });
+    const cPre = await ensureCat('Prepago de crédito', 'invest');
+    const cCost = await ensureCat('Comisión e intereses de prepago', 'expense');
+    const base = M.base(), owner = M.ownerId();
+    const mk = (o) => ({ id: db.uid(), kind: 'out', date: st.date, currency: base, accountId: acc ? acc.id : null, paidBy: owner, alloc: 'none', ...o });
+    const txs = [mk({ amount: Math.round(s.prepay * ufd), categoryId: cPre.id, desc: `Prepago ${d.name}` })];
+    if (cost > 0) txs.push(mk({ amount: Math.round(cost * ufd), categoryId: cCost.id, desc: `Comisión e intereses prepago ${d.name}` }));
+    const before = { ...db.get('debts', d.id) };
+    await db.put('debts', after);
+    await db.putMany('tx', txs);
+    m.close();
+    toast('Prepago registrado: la tabla del crédito se actualizó', { label: 'Deshacer', ms: 10000, onAction: async () => { await db.put('debts', before); await db.delMany('tx', txs.map(t => t.id)); } });
+  }
+  const concreteCard = h('section', { class: 'card' }, h('h3', null, 'Concretar el prepago'),
+    h('p', { class: 'muted small' }, 'Cuando lo hagas en el banco, regístralo aquí con lo que te cobraron (la liquidación del prepago trae la comisión y los intereses). La tabla se rehace desde la próxima cuota.'),
+    modeBox,
+    h('div', { class: 'fc-fields' },
+      h('label', { class: 'fc-field' }, h('span', null, 'Fecha'), dateIn),
+      h('label', { class: 'fc-field' }, h('span', null, `Comisión (${d.currency})`), feeIn),
+      h('label', { class: 'fc-field' }, h('span', null, `Intereses (${d.currency})`), intIn)),
+    h('label', { class: 'fc-field' }, h('span', null, 'Desde la cuenta'), accSel),
+    h('small', { class: 'muted' }, 'Si no los escribes, se estiman: la comisión máxima (1,5 meses de interés sobre lo prepagado) y los intereses desde la última cuota.'),
+    resultBox,
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn primary', onclick: concretar }, 'Registrar prepago')));
   const body = h('div', null,
     numField('Monto a prepagar', st.amount, (v) => { st.amount = v; draw(); }, { suffix: d.currency, hint: inUF() ? `1 UF = ${M.fmt(inUF(), M.base())}` : null }),
-    out);
-  modal(`Prepagar: ${d.name}`, body, { wide: true });
+    adviceBox, out, concreteCard,
+    (d.mortgage.prepayments || []).length ? h('p', { class: 'muted small' }, `Prepagos registrados: ${(d.mortgage.prepayments || []).map(x => `${new Date(x.date + 'T12:00:00').toLocaleDateString('es-CL')} ${uf(x.amount)} (${x.mode === 'plazo' ? 'plazo' : 'dividendo'})`).join(' · ')}`) : null);
+  const m = modal(`Prepagar: ${d.name}`, body, { wide: true });
   draw();
 }
 

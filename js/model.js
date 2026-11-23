@@ -563,11 +563,17 @@ export function cuotasPaid(d, date) {
   const k = (y * 12 + mo) - (fy * 12 + fm) + (Number(date.slice(8)) >= Number(m.first.slice(8)) ? 1 : 0);
   return Math.max(0, Math.min(m.rows.length, k));
 }
+// saldo de un hipotecario en una fecha: el de la última cuota vencida, menos lo prepagado desde entonces (la
+// tabla ya trae el prepago desde la cuota siguiente)
+export function mortgageBalance(d, date) {
+  const k = cuotasPaid(d, date);
+  const b = k ? d.mortgage.rows[k - 1][7] : d.mortgage.principal;
+  return Math.max(0, b - (d.mortgage.prepayments || []).filter(pp => pp.after === k && pp.date <= date).reduce((a, pp) => a + pp.amount, 0));
+}
 export function debtBalanceAt(d, date, entries = null) {
   if (d.mortgage) {
     if (date < d.mortgage.from) return 0;
-    const k = cuotasPaid(d, date);
-    return k ? d.mortgage.rows[k - 1][7] : d.mortgage.principal;
+    return mortgageBalance(d, date);
   }
   return (entries || db.all('debtEntries')).filter(e => e.debtId === d.id && e.date <= date).reduce((a, e) => a + e.amount, 0);
 }
@@ -1161,7 +1167,7 @@ export function prepaySimulation(d, prepay, { at = todayStr() } = {}) {
   const rows = d.mortgage.rows;
   const k = cuotasPaid(d, at);
   const m = rows.length - k;
-  const B = k ? rows[k - 1][7] : d.mortgage.principal;
+  const B = mortgageBalance(d, at);
   if (m <= 0 || B <= 0) return null;
   const next = rows[k];
   const i = next[2] / B;                                          // tasa mensual de la tabla
@@ -1182,6 +1188,82 @@ export function prepaySimulation(d, prepay, { at = todayStr() } = {}) {
   if (B2 > 0) m2 = i > 0 ? Math.ceil(-Math.log(1 - B2 * i / A) / Math.log(1 + i)) : Math.ceil(B2 / A);
   const plazo = { months: m2, monthsSaved: m - m2, interestSaved: intLeft - Math.max(0, A * m2 - B2), insuranceSaved: insLeft * (m - m2) / m, end: addMonths(ymOf(at), m2) };
   return { balance: B, remaining: m, annualRate: Math.pow(1 + i, 12) - 1, prepay: P, cuota, plazo, endNow: addMonths(ymOf(at), m) };
+}
+
+// Concretar un prepago: la tabla se rehace desde la próxima cuota con el saldo menos lo prepagado, a la misma
+// tasa, con el seguro de incendio fijo y el desgravamen según el saldo (como lo recalcula el banco).
+// mode 'plazo': el mismo dividendo y menos cuotas; 'dividendo': las mismas cuotas y un dividendo menor.
+// fee (comisión) e interest (intereses del período hasta el prepago) quedan anotados en el crédito: el interés
+// cuenta para el resumen de renta. Devuelve el crédito actualizado (sin guardarlo) o null.
+export function prepaidMortgage(d, { date, amount, mode = 'plazo', fee = 0, interest = 0 }) {
+  if (!d || !d.mortgage) return null;
+  const rows = d.mortgage.rows;
+  const k = cuotasPaid(d, date);
+  const B = mortgageBalance(d, date);
+  const next = rows[k];
+  if (!next || !(amount > 0) || B <= 0) return null;
+  const i = next[2] / B, A = next[1] + next[2], fire = next[4] || 0, lifeRate = (next[5] || 0) / B;
+  const P = Math.min(amount, B);
+  const m = rows.length - k;
+  let bal = B - P;
+  const pay = mode === 'dividendo' ? (bal > 0 ? (i > 0 ? bal * i / (1 - Math.pow(1 + i, -m)) : bal / m) : 0) : A;
+  const R = (x) => Math.round(x * 1e4) / 1e4;
+  const out = rows.slice(0, k).map(r => [...r]);
+  for (let n = k + 1; bal > 0.00005 && n <= k + m; n++) {
+    const int = bal * i;
+    // la última cuota (o la que alcanza para terminar) paga todo el saldo
+    const am = n === k + m || pay - int >= bal ? bal : pay - int;
+    const life = bal * lifeRate;
+    bal -= am;
+    out.push([n, R(am), R(int), R(am + int), R(fire), R(life), R(am + int + fire + life), R(Math.max(0, bal))]);
+  }
+  const entry = { date, amount: R(P), mode, fee: R(fee), interest: R(interest), after: k, rowsBefore: rows };
+  return { ...d, mortgage: { ...d.mortgage, rows: out, prepayments: [...(d.mortgage.prepayments || []), entry] } };
+}
+
+// Qué conviene con un prepago de `amount` (en la moneda del crédito): no quedarse sin colchón (la caja
+// proyectada con el prepago), prepagar primero el crédito de mayor tasa, y si la rebaja de intereses de la
+// renta (tope 8 UTA al año) ya está cubierta. Devuelve { mode, reasons: [texto], ok }.
+export function prepayAdvice(d, amount) {
+  const s = prepaySimulation(d, amount);
+  if (!s) return null;
+  const uf = rateFor(d.currency === 'UF' ? 'UF' : d.currency, todayStr()) || 1;
+  const cost = s.prepay * (d.currency === base() ? 1 : uf);
+  const fc = cashForecast({ months: 12 });
+  const low = fc.rows.reduce((a, r) => (r.balance < a.balance ? r : a), fc.rows[0]);
+  const lowAfter = low.balance - cost;
+  const cushion = 3 * (fc.spendBase || 0);                      // 3 meses de gasto
+  const others = db.all('debts').filter(x => x.mortgage && !x.archived && x.id !== d.id).map(x => ({ x, s: prepaySimulation(x, 0) })).filter(o => o.s);
+  const higher = others.filter(o => o.s.annualRate > s.annualRate + 0.0005).sort((a, b) => b.s.annualRate - a.s.annualRate)[0];
+  // intereses de los próximos 12 meses de todos los créditos, en pesos, contra el tope de 8 UTA
+  const ufNow = rateFor('UF', todayStr()) || 1;
+  const utaNow = (rateFor('UTM', todayStr()) || ufNow * 1.747) * 12;
+  const interest12 = db.all('debts').filter(x => x.mortgage && !x.archived).reduce((a, x) => {
+    const k = cuotasPaid(x, todayStr());
+    return a + x.mortgage.rows.slice(k, k + 12).reduce((b, r) => b + r[2], 0) * (x.currency === 'UF' ? ufNow : (rateFor(x.currency, todayStr()) ?? 1));
+  }, 0);
+  const cut12 = (s.cuota.interestSaved / Math.max(1, s.remaining)) * 12 * ufNow;   // menos interés al año, aprox.
+  const reasons = [];
+  let mode = 'plazo', ok = true;
+  if (low.balance < 0) {
+    // ya sin prepagar la caja proyectada queda en negativo: prepagar la empeora
+    ok = false;
+    mode = 'dividendo';
+    reasons.push(`Tu caja proyectada ya queda en negativo sin prepagar (${fmt(low.balance, base())} en ${monthName(low.ym).toLowerCase()}): antes de prepagar conviene tener caja de sobra. Si igual lo haces, bajar el dividendo alivia ${fmt(s.cuota.monthlySaving * uf, base())} al mes.`);
+  } else if (lowAfter < cushion) {
+    ok = lowAfter >= 0;
+    mode = 'dividendo';
+    reasons.push(lowAfter < 0
+      ? `Con este monto tu caja proyectada quedaría en negativo (${fmt(lowAfter, base())} en ${monthName(low.ym).toLowerCase()}). Mejor un prepago menor, o esperar a un ingreso grande.`
+      : `Tu caja quedaría con poco colchón (${fmt(lowAfter, base())} en ${monthName(low.ym).toLowerCase()}, menos de 3 meses de gasto): bajar el dividendo libera ${fmt(s.cuota.monthlySaving * uf, base())} al mes.`);
+  } else {
+    reasons.push(`Acortar el plazo ahorra ${fmt((s.plazo.interestSaved - s.cuota.interestSaved) * uf, base())} más de interés que bajar el dividendo, y tu caja lo aguanta (mínimo ${fmt(lowAfter, base())} en ${monthName(low.ym).toLowerCase()}).`);
+  }
+  if (higher) reasons.push(`Ojo: ${higher.x.name} tiene una tasa mayor (${(higher.s.annualRate * 100).toFixed(2).replace('.', ',')}% contra ${(s.annualRate * 100).toFixed(2).replace('.', ',')}%): conviene prepagar ese primero.`);
+  if (interest12 - cut12 > 8 * utaNow) reasons.push(`No pierdes rebaja de impuestos: tus intereses hipotecarios (~${fmt(interest12, base())} al año) siguen sobre el tope de 8 UTA (${fmt(8 * utaNow, base())}).`);
+  else if (interest12 > 8 * utaNow) reasons.push('Tus intereses bajarían del tope de 8 UTA de la rebaja de la renta: parte del ahorro se compensa con una rebaja menor (si tu renta permite usarla).');
+  reasons.push(`Prepagar rinde como una inversión sin riesgo al ${(s.annualRate * 100).toFixed(2).replace('.', ',')}% sobre la UF: conviene si no tienes otra que rinda más después de impuestos.`);
+  return { mode, ok, reasons, lowAfter, low };
 }
 
 // ¿Arrendar o vender una propiedad? Todo en UF (pesos de hoy). Vender hoy: se recibe valor − costo de venta −
@@ -1447,6 +1529,12 @@ export function taxSummary(year) {
         const due = addMonths(ymOf(d.mortgage.first), n - 1) + d.mortgage.first.slice(7);
         const ufd = d.currency === 'UF' ? (rateFor('UF', due) || ufEnd || 0) : (rateFor(d.currency, due) ?? 1);
         interestUF += row[2]; interest += row[2] * ufd; paidUF += row[6]; paid += row[6] * ufd; cuotas++;
+      }
+      // prepagos del año: los intereses del período que se pagan al prepagar también son intereses del crédito
+      for (const pp of d.mortgage.prepayments || []) {
+        if (!inYear(pp.date) || !pp.interest) continue;
+        const ufd = d.currency === 'UF' ? (rateFor('UF', pp.date) || ufEnd || 0) : (rateFor(d.currency, pp.date) ?? 1);
+        interestUF += pp.interest; interest += pp.interest * ufd;
       }
     }
     const tag = p.tag;
@@ -1744,6 +1832,10 @@ export async function undoMerge({ fromId, toId, movedIds, prevName }) {
 // Cada movimiento registrado desde uno guarda scheduleId y scheduleMonth (así no se pide dos veces).
 export const EVERY = [[0, 'Una vez'], [1, 'Cada mes'], [2, 'Cada 2 meses'], [3, 'Cada 3 meses'], [6, 'Cada 6 meses'], [12, 'Cada año']];
 export const everyLabel = (n) => (EVERY.find(e => e[0] === n) || [0, `Cada ${n} meses`])[1];
+// meses fijos del año (ej. las contribuciones: abril, junio, septiembre y noviembre): `months` = [4, 6, 9, 11]
+const MES_CORTO = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+export const monthsLabel = (ms) => { const l = [...ms].sort((a, b) => a - b).map(m => MES_CORTO[m - 1]); return l.length > 1 ? `${l.slice(0, -1).join(', ')} y ${l.at(-1)}` : l[0] || ''; };
+export const repeatLabel = (s) => (s.months && s.months.length ? `${monthsLabel(s.months).replace(/^./, c => c.toUpperCase())} de cada año` : everyLabel(s.every));
 export const schedules = () => db.all('schedules').filter(s => !s.archived);
 const monthDiff = (a, b) => (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5, 7)) - Number(a.slice(5, 7));
 // Feriados de Chile (para contar días hábiles): los fijos, Viernes y Sábado Santo, los que la ley mueve al lunes
@@ -1821,6 +1913,11 @@ export function nthOfDate(date) {
 }
 export function scheduleMonths(s, from, to) {
   const end = s.end && s.end < to ? s.end : to;
+  if (s.months && s.months.length) {
+    const out = [];
+    for (let m = s.start > from ? s.start : from; m <= end; m = addMonths(m, 1)) if (s.months.includes(Number(m.slice(5, 7)))) out.push(m);
+    return out;
+  }
   if (!s.every) return s.start >= from && s.start <= end ? [s.start] : [];
   let m = s.start;
   if (m < from) m = addMonths(s.start, Math.ceil(monthDiff(s.start, from) / s.every) * s.every);

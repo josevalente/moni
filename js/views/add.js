@@ -596,7 +596,7 @@ export function openTxForm(existing, defaults = {}) {
       fileIn));
     if (isFlow) parts.push(h('div', { class: 'desc-wrap' }, descIn, suggestBox));
     const fromSched = (isEdit ? existing.scheduleId : s.scheduleId) && db.get('schedules', isEdit ? existing.scheduleId : s.scheduleId);
-    if (fromSched) parts.push(h('div', { class: 'sched-note' }, `🔁 De un programado (${M.everyLabel(fromSched.every).toLowerCase()}, ${M.scheduleWhen(fromSched)}). Cambiar este no cambia los próximos. `,
+    if (fromSched) parts.push(h('div', { class: 'sched-note' }, `🔁 De un programado (${M.repeatLabel(fromSched).toLowerCase()}, ${M.scheduleWhen(fromSched)}). Cambiar este no cambia los próximos. `,
       h('a', { href: '#/mas/programados', onclick: () => m.close() }, 'Ver programados')));
     // con cuenta, la moneda es la de la cuenta; también se puede escribir en UF (se guarda convertido)
     if (!canUF()) s.entryUF = false;

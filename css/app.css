@@ -574,3 +574,7 @@ details summary { cursor: pointer; font-weight: 600; margin: 6px 0; }
 .pay-row .r { text-align: right; white-space: nowrap; }
 .pay-row.strong { font-weight: 700; font-size: 17px; border-bottom: 0; }
 .pay-total { margin-top: 10px; }
+.month-chips { flex-wrap: wrap; gap: 6px; }
+.advice-list { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.advice-list li { margin: 4px 0; }
+.card.warn-card { border-color: var(--warn); background: var(--warn); color: var(--warn-ink); }
