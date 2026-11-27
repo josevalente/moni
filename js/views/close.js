@@ -102,7 +102,8 @@ export function renderClose(root) {
     : 'porcentaje fijo';
   const own = M.ownerId();
 
-  const detailFor = (catId) => M.sortTx(M.txsInMonth(ym).filter(t => (t.kind === 'out' || t.kind === 'in') && (t.categoryId || '_') === catId && t.alloc && (t.alloc === 'shared' || t.alloc.startsWith('p:'))));
+  // incluye las cuotas de este mes de compras anteriores
+  const detailFor = (catId) => M.sortTx(M.closeTxs(ym).filter(t => (t.categoryId || '_') === catId && t.alloc && (t.alloc === 'shared' || t.alloc.startsWith('p:'))));
 
   const result = tr.length
     ? h('div', null, tr.map(t => h('div', { class: 'big' }, `${M.personName(t.from)} → ${M.personName(t.to)}  ${M.fmt(t.amount, base)}`)))
@@ -149,6 +150,6 @@ export function renderClose(root) {
       led.lines.length ? led.lines.map(l => h('details', { class: 'cat-detail' },
         h('summary', null, h('span', { class: 'cd-name' }, ((l.cat && l.cat.icon) || '') + ' ' + (l.cat ? l.cat.name : 'Sin categoría')),
           h('span', { class: 'cd-vals' }, h('b', null, M.fmt(l.total, base)), h('small', null, ppl.map(p => `${p.name} ${M.fmt(l.owed[p.id] || 0, base)}`).join(' · ')))),
-        h('div', { class: 'inner' }, detailFor(l.cat ? l.cat.id : '_').map(t => txRow(t, { showDate: true }))))) : h('p', { class: 'empty' }, 'No hay gastos compartidos en este mes.')),
+        h('div', { class: 'inner' }, detailFor(l.cat ? l.cat.id : '_').map(t => txRow(t, { showDate: true, cuotaYm: ym }))))) : h('p', { class: 'empty' }, 'No hay gastos compartidos en este mes.')),
     led.settlements.length ? h('section', { class: 'card' }, h('h3', null, 'Pagos registrados para este cierre'), led.settlements.map(t => txRow(t, { showDate: true }))) : null);
 }

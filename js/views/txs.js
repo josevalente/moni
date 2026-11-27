@@ -5,7 +5,7 @@ import { openTxForm, categoryPicker } from './add.js';
 import { renderAccount, openAccount } from './account.js';
 import { entryCalendar } from './insights.js';
 
-export function txRow(tx, { showDate = false } = {}) {
+export function txRow(tx, { showDate = false, cuotaYm = null } = {}) {
   const cat = M.category(tx.categoryId);
   const acc = M.account(tx.accountId);
   const ppl = M.people();
@@ -34,7 +34,12 @@ export function txRow(tx, { showDate = false } = {}) {
     else if (acc && ppl.length > 0) sub.push(acc.name);
   }
   if (tx.tag) sub.push('#' + tx.tag);
-  if (tx.scheduleId) sub.push('🔁');                       // registrado desde un programado
+  if (tx.scheduleId) sub.push('🔁');
+  // en cuotas: en el cierre, la de ese mes; en el resto, cuántas son
+  if (tx.cuotas >= 2) {
+    const cs = cuotaYm ? M.closeShare(tx, cuotaYm) : null;
+    sub.push(cs ? `cuota ${cs.n} de ${tx.cuotas}: ${M.fmt(tx.amount / tx.cuotas, tx.currency)}` : `${tx.cuotas} cuotas`);
+  }                       // registrado desde un programado
   return h('button', { class: 'row tx ' + cls, onclick: () => openTxForm(tx) },
     h('div', { class: 'main' },
       h('div', { class: 'title' }, title),

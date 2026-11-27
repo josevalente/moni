@@ -225,6 +225,26 @@ export function openTxForm(existing, defaults = {}) {
     h('option', { value: 'h' }, 'día hábil'));            // lunes a viernes sin feriados de Chile
   const repEndIn = h('input', { type: 'month', 'aria-label': 'Hasta (opcional)' });
   const repShiftSel = h('select', { 'aria-label': 'Si cae en fin de semana o feriado' }, M.SHIFTS.map(([v, l]) => h('option', { value: v }, l)));
+  // compra en cuotas (tarjeta de crédito): cuántas y el mes de la primera
+  const cuotasIn = h('input', { type: 'text', inputmode: 'numeric', 'aria-label': 'Número de cuotas', placeholder: 'ej. 6' });
+  const cuotasFromIn = h('input', { type: 'month', 'aria-label': 'Mes de la primera cuota' });
+  const cuotasHint = h('small', { class: 'muted' });
+  const readCuotas = () => {
+    const n = Math.round(Number(String(cuotasIn.value).trim()));
+    s.cuotas = n >= 2 && n <= 60 ? n : null;
+    s.cuotasFrom = cuotasFromIn.value || null;
+    cuotasWhen();
+  };
+  const cuotasWhen = () => {
+    if (sumChips.cuotas) sumChips.cuotas.lastChild.textContent = cuotasLabel();
+    if (!s.cuotas) { cuotasHint.textContent = 'Desde 2 cuotas. En el cierre entre ustedes, cada mes cuenta solo su cuota.'; return; }
+    const from = s.cuotasFrom || M.addMonths(s.date.slice(0, 7), 1);
+    const to = M.addMonths(from, s.cuotas - 1);
+    const amt = M.evalAmount(s.amount);
+    const each = Number.isFinite(amt) ? M.fmt(Math.abs(amt) / s.cuotas, s.currency) : null;
+    cuotasHint.textContent = `${each ? `${each} al mes, ` : ''}de ${M.monthName(from).toLowerCase()} a ${M.monthName(to).toLowerCase()}. ${s.alloc === 'shared' ? 'En el cierre de cada mes entra solo esa cuota (y la parte de cada uno).' : 'Si es compartido, en el cierre de cada mes entra solo esa cuota.'} La tarjeta debe la compra completa desde hoy.`;
+  };
+  for (const ev of ['input', 'change']) { cuotasIn.addEventListener(ev, readCuotas); cuotasFromIn.addEventListener(ev, readCuotas); }
   // lo elegido en los campos de Repetir (se lee al cambiar y otra vez al guardar)
   const readRepeat = () => {
     if (!s.repeat) return;
@@ -491,7 +511,7 @@ export function openTxForm(existing, defaults = {}) {
       onclick: () => { s.amount = numText(s.lastAmount.amount); amountIn.value = s.amount; updateEval(); updateFx(); },
     }, `Usar el último: ${M.fmt(s.lastAmount.amount, s.lastAmount.currency)}`) : null);
   }
-  amountIn.addEventListener('input', () => { s.amount = amountIn.value; updateEval(); updateFx(); if (toAmtInput) toAmtInput.placeholder = toAmtHint(); });
+  amountIn.addEventListener('input', () => { s.amount = amountIn.value; updateEval(); updateFx(); if (toAmtInput) toAmtInput.placeholder = toAmtHint(); if (s.open === 'cuotas') cuotasWhen(); });
 
   let fxAsked = false;
   function updateFx() {
@@ -528,6 +548,9 @@ export function openTxForm(existing, defaults = {}) {
   const allocLabel = () => (s.alloc === 'shared' ? splitLabel() : `Solo de ${M.personName(s.alloc === 'payer' || !s.alloc ? s.paidBy : s.alloc)}`);
   const repeatLabel = () => (s.repeat ? `${M.everyLabel(s.repeat.every)}, ${M.scheduleWhen({ ...s.repeat, nth: s.repeat.mode === 'week' ? s.repeat.nth : null })}${s.entryUF ? ' · en UF' : ''}` : 'Repetir');
   const canRepeat = () => !isEdit && !s.scheduleId && (s.kind === 'out' || s.kind === 'in');
+  // cuotas: un gasto con una tarjeta de crédito (o uno que ya venía en cuotas)
+  const canCuotas = () => s.kind === 'out' && ((acc() && acc().type === 'credit') || s.cuotas >= 2);
+  const cuotasLabel = () => (s.cuotas >= 2 ? `${s.cuotas} cuotas` : 'Cuotas');
   // el programado parte en el mes de la fecha; si ese mes su día ya pasó (antes de la fecha) y no se registra este
   // movimiento, ese mes se omite: el primero es el siguiente que corresponde
   const scheduleStart = (sc, registering) => {
@@ -658,7 +681,8 @@ export function openTxForm(existing, defaults = {}) {
         many ? sum('payer', '👤', `${s.kind === 'in' ? 'Recibió' : 'Pagó'} ${M.personName(s.paidBy)}`) : null,
         many ? sum('alloc', '👥', allocLabel()) : null,
         sum('tag', '#', s.tag ? '#' + s.tag : 'Etiqueta'),
-        canRepeat() ? sum('repeat', '🔁', repeatLabel()) : null));
+        canRepeat() ? sum('repeat', '🔁', repeatLabel()) : null,
+        canCuotas() ? sum('cuotas', '💳', cuotasLabel()) : null));
       futureNote = canRepeat() ? h('div', { class: 'sched-note', hidden: !(s.date > today) },
         '📅 Fecha futura: queda programado. Ese día aparece en Pendientes para confirmarlo y la proyección de caja ya lo cuenta.') : null;
       parts.push(futureNote);
@@ -684,6 +708,16 @@ export function openTxForm(existing, defaults = {}) {
           s.alloc === 'shared' ? h('small', { class: 'muted' }, `${splitLabel().replace('Compartido ', '')} (${catMode})`) : null));
       } else if (s.open === 'tag') {
         parts.push(h('div', { class: 'sum-editor' }, tagIn));
+      } else if (s.open === 'cuotas' && canCuotas()) {
+        cuotasIn.value = s.cuotas ? String(s.cuotas) : '';
+        cuotasFromIn.value = s.cuotasFrom || M.addMonths(s.date.slice(0, 7), 1);
+        cuotasWhen();
+        parts.push(h('div', { class: 'sum-editor' },
+          h('div', { class: 'rep-fields' },
+            h('label', { class: 'fc-field' }, h('span', null, 'Número de cuotas'), cuotasIn),
+            h('label', { class: 'fc-field' }, h('span', null, 'Primera cuota'), cuotasFromIn)),
+          cuotasHint,
+          h('small', { class: 'muted' }, 'Monto: el total de la compra. Si tiene interés, el total con interés (ej. 45.990 × 6).')));
       } else if (s.open === 'repeat' && canRepeat()) {
         const pick = (v) => {
           const n = Number(v);
@@ -802,6 +836,9 @@ export function openTxForm(existing, defaults = {}) {
     }
     if (!tx.tag) delete tx.tag;
     if (ufAmount != null) tx.uf = ufAmount; else delete tx.uf;
+    // en cuotas (solo gastos)
+    if (isFlow && s.kind === 'out' && s.cuotas >= 2) { tx.cuotas = s.cuotas; tx.cuotasFrom = s.cuotasFrom || M.addMonths(s.date.slice(0, 7), 1); }
+    else { delete tx.cuotas; delete tx.cuotasFrom; }
     // desde un programado (Pendientes): queda confirmado ese mes
     if (!isEdit && s.scheduleId) { tx.scheduleId = s.scheduleId; tx.scheduleMonth = s.scheduleMonth; }
     const before = isEdit ? { ...existing } : null;
@@ -835,7 +872,7 @@ export function openTxForm(existing, defaults = {}) {
     }
     if (again && !isEdit) {
       // otro del mismo ticket: se conservan categoría, cuenta, fecha, pagador y reparto
-      s.amount = ''; s.desc = ''; s.lastAmount = null; amountIn.value = ''; descIn.value = ''; s.fxTouched = false; s.open = null; s.repeat = null;
+      s.amount = ''; s.desc = ''; s.lastAmount = null; amountIn.value = ''; descIn.value = ''; s.fxTouched = false; s.open = null; s.repeat = null; s.cuotas = null; s.cuotasFrom = null;
       render();
       ((s.kind === 'out' || s.kind === 'in') ? descIn : amountIn).focus();
     } else m.close();
@@ -843,7 +880,7 @@ export function openTxForm(existing, defaults = {}) {
 
   const dup = isEdit ? h('button', { class: 'btn ghost', onclick: () => {
     m.close();
-    const { id, createdAt, updatedAt, ref, scheduleId, scheduleMonth, ...rest2 } = existing;
+    const { id, createdAt, updatedAt, ref, scheduleId, scheduleMonth, cuotas, cuotasFrom, ...rest2 } = existing;
     openTxForm(null, { ...rest2, date: M.todayStr(), amount: numText(rest2.amount), toAmount: rest2.toAmount != null ? numText(rest2.toAmount) : '', alloc: rest2.alloc ?? 'none' });
   } }, 'Duplicar') : null;
   const delBtn = isEdit ? h('button', { class: 'btn danger ghost', onclick: async () => {

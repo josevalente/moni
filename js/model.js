@@ -655,6 +655,20 @@ function shares(tx, cat, pct, ps) {
 
 export const settleMonthOf = (tx) => tx.settleMonth || tx.date.slice(0, 7);
 
+// Compras en cuotas con tarjeta de crédito: `cuotas` (2 o más) y `cuotasFrom` ('AAAA-MM', el mes de la primera;
+// por defecto el siguiente a la compra). La tarjeta debe la compra completa desde el día de compra, pero en el
+// cierre entre las personas cada mes cuenta solo su cuota.
+export const cuotasFrom = (tx) => tx.cuotasFrom || addMonths(tx.date.slice(0, 7), 1);
+// la parte del movimiento que entra en el cierre de `ym` ({ f, n }: fracción y número de cuota) o null
+export function closeShare(tx, ym) {
+  if (!(tx.cuotas >= 2)) return tx.date.slice(0, 7) === ym ? { f: 1, n: 0 } : null;
+  const from = cuotasFrom(tx);
+  const n = (Number(ym.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(ym.slice(5, 7)) - Number(from.slice(5, 7)) + 1;
+  return n >= 1 && n <= tx.cuotas ? { f: 1 / tx.cuotas, n } : null;
+}
+// gastos e ingresos que entran en el cierre de un mes (incluye las cuotas de compras anteriores)
+export const closeTxs = (ym) => db.all('tx').filter(t => (t.kind === 'out' || t.kind === 'in') && closeShare(t, ym));
+
 // Cierre de un mes: quién pagó, cuánto le corresponde a cada uno, pagos registrados.
 export function statement(ym) {
   const ps = people();
@@ -672,13 +686,14 @@ export function statement(ym) {
       if (got[tx.to] != null) got[tx.to] += b;
       continue;
     }
-    if (tx.date.slice(0, 7) !== ym) continue;
     if (tx.kind !== 'out' && tx.kind !== 'in') continue;
+    const cs = closeShare(tx, ym);                       // en cuotas: solo la de este mes
+    if (!cs) continue;
     const cat = category(tx.categoryId);
     const sh = shares(tx, cat, pct, ps);
     if (!sh) continue;
     const sign = tx.kind === 'in' ? -1 : 1;
-    const b = txBase(tx) * sign;
+    const b = txBase(tx) * sign * cs.f;
     if (paid[tx.paidBy] != null) paid[tx.paidBy] += b;
     const key = tx.categoryId || '_';
     if (!lines.has(key)) lines.set(key, { cat, total: 0, owed: {}, paid: {}, n: 0 });
